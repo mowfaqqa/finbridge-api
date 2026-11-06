@@ -7,9 +7,10 @@ import { randomUUID } from 'node:crypto';
 import { PlatformModule } from './platform/platform.module';
 import { Problem, ProblemFilter } from "./platform/problem";
 import { IdentityModule } from "./identity/identity.module";
+import { FinancialModule } from "./financial/financial.module";
 import { readConfig } from "./platform/config";
 
-@Module({ imports: [PlatformModule, IdentityModule] })
+@Module({ imports: [PlatformModule, IdentityModule, FinancialModule] })
 export class AppModule {}
 
 export async function createApp(quiet = false) {

@@ -183,3 +183,46 @@ test('invitations bind verified identity, supersede safely and grant only the se
   assert.equal((await (await request(root, { cookie: viewer.cookie })).json()).role, 'OWNER');
   assert.equal((await request(`${root}/members`, { cookie: owner.cookie })).status, 403);
 });
+
+test('customers support stable cursor navigation, versioned writes and viewer read-only access', async () => {
+  const owner = await signIn('owner');
+  const viewer = await signIn('viewer');
+  const other = await signIn('second-owner');
+  const workspace = await createWorkspace(owner.cookie, 'Customer records test');
+  const root = `/workspaces/${workspace.id}`;
+  const invitation = await request(`${root}/invitations`, {
+    cookie: owner.cookie, key: randomUUID(), body: { email: viewer.actor.verifiedEmail, role: 'VIEWER' },
+  });
+  assert.equal(invitation.status, 201);
+  assert.equal((await request('/invitations/accept', {
+    cookie: viewer.cookie, key: randomUUID(), body: { token: (await invitation.json()).token },
+  })).status, 200);
+  const list = `${root}/customers`;
+  const add = async (name, key = randomUUID()) => {
+    const response = await request(list, { cookie: owner.cookie, key, body: { displayName: name } });
+    assert.equal(response.status, 201, await response.clone().text());
+    return response.json();
+  };
+  const firstKey = randomUUID();
+  const first = await add('A Lagos customer', firstKey);
+  assert.equal((await add('A Lagos customer', firstKey)).id, first.id);
+  const second = await add('B Lagos customer');
+  const third = await add('C Abuja customer');
+  const page = await (await request(`${list}?q=LAGOS&limit=1`, { cookie: viewer.cookie })).json();
+  assert.deepEqual(page, { items: [first], nextCursor: first.id, previousCursor: null });
+  const next = await (await request(`${list}?q=LAGOS&limit=1&after=${first.id}`, { cookie: viewer.cookie })).json();
+  assert.deepEqual(next, { items: [second], nextCursor: null, previousCursor: second.id });
+  const previous = await (await request(`${list}?q=LAGOS&limit=1&before=${second.id}`, { cookie: viewer.cookie })).json();
+  assert.deepEqual(previous, page);
+
+  const update = (cookie, email) => request(`${list}/${third.id}`, {
+    method: 'PATCH', cookie, key: randomUUID(), body: { version: 1, email },
+  });
+  assert.equal((await update(viewer.cookie, 'viewer@example.test')).status, 403);
+  assert.equal((await request(`${list}/${third.id}`, { cookie: other.cookie })).status, 404);
+  const updates = await Promise.all([update(owner.cookie, 'one@example.test'), update(owner.cookie, 'two@example.test')]);
+  assert.deepEqual(updates.map((response) => response.status).sort(), [200, 409]);
+  const fresh = await (await request(`${list}/${third.id}`, { cookie: viewer.cookie })).json();
+  assert.equal(fresh.version, 2);
+  assert.ok(fresh.email.endsWith('@example.test'));
+});

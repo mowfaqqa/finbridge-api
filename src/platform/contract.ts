@@ -32,3 +32,10 @@ export const workspaceView = z.object({
   version: z.number().int(),
 });
 export const actorView = z.object({ id: uuid, verifiedEmail: z.email().nullable() });
+
+export function resourceId(value: string) {
+  if (!uuid.safeParse(value).success) throw new Problem(404, 'NOT_FOUND', 'Resource unavailable');
+  return value;
+}
+
+export const version = z.number().int().min(1);

@@ -61,6 +61,7 @@ model Workspace {
   invitations Invitation[]
   auditEvents AuditEvent[]
   idempotency IdempotencyRecord[]
+  customers   Customer[]
 
   @@map("workspaces")
 }
@@ -125,4 +126,18 @@ model Invitation {
 
   @@index([tenantId, email])
   @@map("invitations")
+}
+
+model Customer {
+  tenantId    String    @map("tenant_id") @db.Uuid
+  id          String    @default(uuid()) @db.Uuid
+  workspace   Workspace @relation(fields: [tenantId], references: [id])
+  displayName String    @map("display_name")
+  email       String?
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([tenantId, id])
+  @@index([tenantId, displayName, id])
+  @@map("customers")
 }
