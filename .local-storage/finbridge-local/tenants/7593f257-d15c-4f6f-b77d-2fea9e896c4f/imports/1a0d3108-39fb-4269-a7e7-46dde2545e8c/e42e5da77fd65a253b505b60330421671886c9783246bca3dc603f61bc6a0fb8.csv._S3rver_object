@@ -1,0 +1,5 @@
+date,description,amount,reference,source_id
+2026-10-15,Recorded receipt,35000,DEMO-RECEIPT,demo-001
+2026-10-15,Remaining invoice payment,50000,INV-001,demo-002
+2026-10-15,Supplies debit,-25000,DEMO-EXPENSE,demo-003
+2026-10-15,Transfer to reserve,-20000,DEMO-TRANSFER,demo-004

@@ -1,0 +1,4 @@
+date,description,amount,reference,source_id
+2026-10-02,Lagos receipt,35000.01,ref-1,
+2026-10-02,Lagos receipt,35000.01,ref-1,
+2026-10-08,Supply debit,-25000,ref-2,source2
