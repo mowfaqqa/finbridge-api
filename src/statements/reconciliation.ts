@@ -32,7 +32,7 @@ const candidateSchema = z.object({
   resultingBalanceKobo: z.string().nullable(), signal: z.enum(['REFERENCE', 'AMOUNT_DATE', 'SEARCH']), distance: z.number().int(),
 });
 const querySchema = listQuery.extend({
-  accountId: uuid.optional(), status: lineStatus.optional(), start: dateOnly.optional(), end: dateOnly.optional(),
+  accountId: uuid.optional(), accounts: z.string().transform((value) => value.split(',')).pipe(z.array(uuid).max(100)).optional(), status: lineStatus.optional(), start: dateOnly.optional(), end: dateOnly.optional(),
   sort: z.enum(['asc', 'desc']).default('desc'),
 }).refine((query) => !(query.before && query.after), { message: 'Use either the next or previous cursor' })
   .refine((query) => !(query.start && query.end && query.end < query.start), { message: 'Choose an ordered date range' });
@@ -145,6 +145,7 @@ export class ReconciliationController {
   @ApiListQuery()
   @ApiQuery({ name: 'status', enum: lineStatus.options, required: false })
   @ApiQuery({ name: 'accountId', type: String, required: false })
+  @ApiQuery({ name: 'accounts', type: String, required: false })
   @ApiQuery({ name: 'start', type: String, required: false })
   @ApiQuery({ name: 'end', type: String, required: false })
   @ApiQuery({ name: 'sort', enum: ['asc', 'desc'], required: false })
@@ -157,7 +158,7 @@ export class ReconciliationController {
     return this.workspaces.run(actor, tenantId, undefined, async (tx) => {
       const rows = await tx.statementEntry.findMany({
         where: {
-          tenantId, accountId: query.accountId,
+          tenantId, accountId: query.accountId ?? (query.accounts ? { in: query.accounts } : undefined),
           bookingDate: { gte: query.start ? new Date(query.start) : undefined, lte: query.end ? new Date(query.end) : undefined },
           allocations: query.status === 'MATCHED' ? { some: { releasedAt: null, matchId: { not: null } } } :
             query.status === 'TRANSFER' ? { some: { releasedAt: null, transferId: { not: null } } } :

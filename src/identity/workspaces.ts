@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { Workspace, WorkspaceRole } from '@prisma/client';
+import type { Prisma, Workspace, WorkspaceRole } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { Database } from '../platform/database';
 import { Problem } from '../platform/problem';
@@ -64,7 +64,7 @@ export class Workspaces {
     tenantId: string,
     allowed: readonly WorkspaceRole[] | undefined,
     action: (tx: Tx, role: WorkspaceRole) => Promise<T>,
-    manageMembership = false,
+    options: { manageMembership?: boolean; isolationLevel?: Prisma.TransactionIsolationLevel } = {},
   ): Promise<T> {
     return this.database.$transaction(async (tx) => {
       await setContext(tx, actor.id);
@@ -75,7 +75,7 @@ export class Workspaces {
       if (!visible) throw this.invisible();
 
       await setContext(tx, actor.id, tenantId);
-      if (manageMembership) await lockScope(tx, `memberships/${tenantId}`);
+      if (options.manageMembership) await lockScope(tx, `memberships/${tenantId}`);
       const [membership] = await tx.$queryRaw<{ role: WorkspaceRole }[]>`
         SELECT m.role FROM memberships m JOIN workspaces w ON w.id = m.tenant_id
         WHERE m.tenant_id = ${tenantId}::uuid AND m.user_id = ${actor.id}::uuid
@@ -86,7 +86,7 @@ export class Workspaces {
         throw new Problem(403, 'ACTION_FORBIDDEN', 'Your workspace role cannot perform this action');
       }
       return action(tx, membership.role);
-    }, { timeout: 15_000 });
+    }, { timeout: 15_000, isolationLevel: options.isolationLevel });
   }
 
   private invisible() {

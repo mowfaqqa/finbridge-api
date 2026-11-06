@@ -9,9 +9,10 @@ import { Problem, ProblemFilter } from "./platform/problem";
 import { IdentityModule } from "./identity/identity.module";
 import { FinancialModule } from "./financial/financial.module";
 import { StatementsModule } from "./statements/statements.module";
+import { ReportingModule } from "./reporting/reporting.module";
 import { readConfig } from "./platform/config";
 
-@Module({ imports: [PlatformModule, IdentityModule, FinancialModule, StatementsModule] })
+@Module({ imports: [PlatformModule, IdentityModule, FinancialModule, StatementsModule, ReportingModule] })
 export class AppModule {}
 
 export async function createApp(quiet = false) {

@@ -54,7 +54,7 @@ export class Memberships {
         return { id, email: input.email, role: input.role, expiresAt: expiresAt.toISOString() };
       });
       return { ...result, token: this.token(result.id, secret) };
-    }, true);
+    }, { manageMembership: true });
   }
 
   async accept(actor: ActorIdentity, token: string, key: string, request: string) {
@@ -117,7 +117,7 @@ export class Memberships {
           userId, updated.version, change);
         return { userId, role: updated.role, version: updated.version, active: !updated.revokedAt };
       },
-    ), true);
+    ), { manageMembership: true });
   }
 
   transfer(actor: ActorIdentity, tenantId: string, input: { userId: string; version: number }, key: string, request: string) {
@@ -141,7 +141,7 @@ export class Memberships {
         await audit(tx, tenantId, actor.id, request, 'workspace_owner_transferred', tenantId, updated.version, { newOwnerId: target.userId });
         return workspaceSummary(updated, 'OPERATOR');
       },
-    ), true);
+    ), { manageMembership: true });
   }
 
   private requireInvitations() {
