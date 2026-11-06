@@ -26,3 +26,21 @@ For local membership testing, invite `operator@finbridge.test` or `viewer@finbri
 ## Managed OIDC configuration
 
 Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and a random `OIDC_FLOW_SECRET` of at least 32 characters to enable managed sign-in. Register `{WEB_ORIGIN}/api/v1/auth/oidc/callback` as an allowed callback on the provider, with the authorization code flow, PKCE S256 and client secret basic authentication. Use an HTTPS issuer and set an HTTPS web origin for production. The provider must return the verified email claim for identity-bound invitations. The local synthetic path works with the four OIDC values unset.
+
+## Statement imports and worker
+
+Start local PostgreSQL and Redis with `docker compose up -d --wait`. For a native Redis installation, use a dedicated instance on loopback port 56379. In separate terminals, run `pnpm storage:dev` for local private S3-compatible storage, `pnpm dev` for the API, and `pnpm worker:dev` for background jobs. The worker uses the separate `finbridge_worker` PostgreSQL role. Run `pnpm db:deploy` after pulling migrations.
+
+The canonical UTF-8 CSV header is `date,description,amount,reference,source_id`. Use an ISO date and a signed NGN amount such as `-25000.01`. Select an account and confirm the inclusive source coverage before validation. Review the staged rows and resolve each ambiguous duplicate before publishing. Reports use published rows and confirmed coverage only.
+
+For integration tests, keep PostgreSQL and Redis running. The tests start an isolated temporary object store and inject a transient read failure to verify worker retry.
+
+## Readiness evidence
+
+Open **Readiness** as an owner or finance operator. Generation captures the current three-month evidence in one database snapshot and queues PDF rendering. The worker embeds IBM Plex Sans from `assets/fonts` under the included OFL license. Keep that directory with the deployed worker. Downloads are authorised per request and expire after 24 hours.
+
+## Local M3 demo
+
+With the API, worker, Redis and object storage running, run `pnpm build && pnpm demo:seed`. Open the printed overview and readiness links in the web app. The seed uses the last three completed Lagos months and creates a new synthetic workspace on each run.
+
+See [the architecture and threat model](docs/architecture.md) and [the local runbook](docs/runbook.md) for service boundaries, verification and recovery.

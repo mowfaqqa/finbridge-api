@@ -3,4 +3,4 @@ dist/
 coverage/
 .env*
 !.env.example
-.local-storage
+.local-storage/

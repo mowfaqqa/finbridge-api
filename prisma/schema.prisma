@@ -61,6 +61,16 @@ model Workspace {
   invitations Invitation[]
   auditEvents AuditEvent[]
   idempotency IdempotencyRecord[]
+  customers   Customer[]
+
+  invoices       Invoice[]
+  invoiceCounter InvoiceCounter?
+
+  expenses Expense[]
+
+  bankAccounts BankAccount[]
+
+  evidenceSnapshots EvidenceSnapshot[]
 
   @@map("workspaces")
 }
@@ -125,4 +135,405 @@ model Invitation {
 
   @@index([tenantId, email])
   @@map("invitations")
+}
+
+model Customer {
+  tenantId    String    @map("tenant_id") @db.Uuid
+  id          String    @default(uuid()) @db.Uuid
+  workspace   Workspace @relation(fields: [tenantId], references: [id])
+  displayName String    @map("display_name")
+  email       String?
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  invoices Invoice[]
+
+  @@id([tenantId, id])
+  @@index([tenantId, displayName, id])
+  @@map("customers")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  VOID
+
+  @@map("invoice_status")
+}
+
+model Invoice {
+  tenantId         String        @map("tenant_id") @db.Uuid
+  id               String        @default(uuid()) @db.Uuid
+  workspace        Workspace     @relation(fields: [tenantId], references: [id])
+  customerId       String        @map("customer_id") @db.Uuid
+  customer         Customer      @relation(fields: [tenantId, customerId], references: [tenantId, id])
+  customerSnapshot Json?         @map("customer_snapshot")
+  issueDate        DateTime      @map("issue_date") @db.Date
+  dueDate          DateTime      @map("due_date") @db.Date
+  status           InvoiceStatus @default(DRAFT)
+  totalKobo        BigInt        @map("total_kobo")
+  issuedNumber     BigInt?       @map("issued_number")
+  issuedAt         DateTime?     @map("issued_at") @db.Timestamptz(3)
+  voidReason       String?       @map("void_reason")
+  voidedAt         DateTime?     @map("voided_at") @db.Timestamptz(3)
+  version          Int           @default(1)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  lines            InvoiceLine[]
+
+  settledKobo BigInt       @default(0) @map("settled_kobo")
+  settlements Settlement[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, issuedNumber])
+  @@index([tenantId, status, dueDate, id])
+  @@index([tenantId, issueDate, id])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  tenantId    String  @map("tenant_id") @db.Uuid
+  invoiceId   String  @map("invoice_id") @db.Uuid
+  invoice     Invoice @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
+  position    Int
+  description String
+  quantity    Int
+  unitKobo    BigInt  @map("unit_kobo")
+
+  @@id([tenantId, invoiceId, position])
+  @@map("invoice_lines")
+}
+
+model InvoiceCounter {
+  tenantId   String    @id @map("tenant_id") @db.Uuid
+  workspace  Workspace @relation(fields: [tenantId], references: [id])
+  lastNumber BigInt    @map("last_number")
+
+  @@map("invoice_counters")
+}
+
+enum ExpenseCategory {
+  SUPPLIES
+  RENT_AND_UTILITIES
+  TRANSPORT
+  PAYROLL
+  FEES
+  OTHER
+
+  @@map("expense_category")
+}
+
+enum ExpenseStatus {
+  ACTIVE
+  VOID
+
+  @@map("expense_status")
+}
+
+model Expense {
+  tenantId    String                @map("tenant_id") @db.Uuid
+  id          String                @default(uuid()) @db.Uuid
+  workspace   Workspace             @relation(fields: [tenantId], references: [id])
+  expenseDate DateTime              @map("expense_date") @db.Date
+  payee       String
+  category    ExpenseCategory
+  reference   String?
+  amountKobo  BigInt                @map("amount_kobo")
+  status      ExpenseStatus         @default(ACTIVE)
+  version     Int                   @default(1)
+  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  voidedAt    DateTime?             @map("voided_at") @db.Timestamptz(3)
+  voidReason  String?               @map("void_reason")
+  matches     ReconciliationMatch[]
+
+  @@id([tenantId, id])
+  @@index([tenantId, expenseDate, id])
+  @@map("expenses")
+}
+
+enum SettlementSource {
+  MANUAL
+  STATEMENT
+
+  @@map("settlement_source")
+}
+
+model Settlement {
+  tenantId       String                @map("tenant_id") @db.Uuid
+  id             String                @default(uuid()) @db.Uuid
+  invoiceId      String                @map("invoice_id") @db.Uuid
+  invoice        Invoice               @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
+  source         SettlementSource
+  receiptDate    DateTime              @map("receipt_date") @db.Date
+  amountKobo     BigInt                @map("amount_kobo")
+  reference      String?
+  version        Int                   @default(1)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  reversedAt     DateTime?             @map("reversed_at") @db.Timestamptz(3)
+  reversedBy     String?               @map("reversed_by") @db.Uuid
+  reversalId     String?               @map("reversal_id") @db.Uuid
+  reversalReason String?               @map("reversal_reason")
+  matches        ReconciliationMatch[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, reversalId])
+  @@index([tenantId, invoiceId, receiptDate, id])
+  @@map("settlements")
+}
+
+model BankAccount {
+  tenantId  String           @map("tenant_id") @db.Uuid
+  id        String           @default(uuid()) @db.Uuid
+  workspace Workspace        @relation(fields: [tenantId], references: [id])
+  label     String
+  lastFour  String?          @map("last_four")
+  active    Boolean          @default(true)
+  version   Int              @default(1)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  imports   ImportBatch[]
+  entries   StatementEntry[]
+
+  @@id([tenantId, id])
+  @@index([tenantId, active, label, id])
+  @@map("bank_accounts")
+}
+
+enum ImportState {
+  UPLOADED
+  VALIDATING
+  REVIEW
+  COMMIT_QUEUED
+  COMMITTED
+  FAILED
+  DISCARDED
+
+  @@map("import_state")
+}
+
+enum RowDisposition {
+  KEEP
+  DUPLICATE
+  REVIEW
+
+  @@map("row_disposition")
+}
+
+model ImportBatch {
+  tenantId      String           @map("tenant_id") @db.Uuid
+  id            String           @default(uuid()) @db.Uuid
+  accountId     String           @map("account_id") @db.Uuid
+  account       BankAccount      @relation(fields: [tenantId, accountId], references: [tenantId, id])
+  createdBy     String           @map("created_by") @db.Uuid
+  filename      String
+  bytes         Int
+  objectKey     String?          @map("object_key")
+  rawDigest     String?          @map("raw_digest")
+  headers       String[]         @default([])
+  mapping       Json?
+  mappingDigest String?          @map("mapping_digest")
+  coverageStart DateTime?        @map("coverage_start") @db.Date
+  coverageEnd   DateTime?        @map("coverage_end") @db.Date
+  state         ImportState      @default(UPLOADED)
+  version       Int              @default(1)
+  acceptedCount Int              @default(0) @map("accepted_count")
+  rowCount      Int              @default(0) @map("row_count")
+  errorCount    Int              @default(0) @map("error_count")
+  reviewCount   Int              @default(0) @map("review_count")
+  problemCode   String?          @map("problem_code")
+  failedStage   String?          @map("failed_stage")
+  replayId      String?          @map("replay_id") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  committedAt   DateTime?        @map("committed_at") @db.Timestamptz(3)
+  rows          ImportRow[]
+  entries       StatementEntry[]
+
+  @@id([tenantId, id])
+  @@index([tenantId, accountId, coverageStart, coverageEnd])
+  @@map("import_batches")
+}
+
+model ImportRow {
+  tenantId      String           @map("tenant_id") @db.Uuid
+  id            String           @default(uuid()) @db.Uuid
+  batchId       String           @map("batch_id") @db.Uuid
+  batch         ImportBatch      @relation(fields: [tenantId, batchId], references: [tenantId, id])
+  rowNumber     Int              @map("row_number")
+  bookingDate   DateTime?        @map("booking_date") @db.Date
+  description   String?
+  reference     String?
+  sourceId      String?          @map("source_id")
+  amountKobo    BigInt?          @map("amount_kobo")
+  fingerprint   String?
+  contentHash   String?          @map("content_hash")
+  previousCount Int              @default(0) @map("previous_count")
+  ambiguous     Boolean          @default(false)
+  disposition   RowDisposition   @default(KEEP)
+  error         String?
+  entries       StatementEntry[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, batchId, rowNumber])
+  @@map("import_rows")
+}
+
+model StatementEntry {
+  tenantId    String                @map("tenant_id") @db.Uuid
+  id          String                @default(uuid()) @db.Uuid
+  accountId   String                @map("account_id") @db.Uuid
+  account     BankAccount           @relation(fields: [tenantId, accountId], references: [tenantId, id])
+  batchId     String                @map("batch_id") @db.Uuid
+  batch       ImportBatch           @relation(fields: [tenantId, batchId], references: [tenantId, id])
+  importRowId String                @map("import_row_id") @db.Uuid
+  importRow   ImportRow             @relation(fields: [tenantId, importRowId], references: [tenantId, id])
+  bookingDate DateTime              @map("booking_date") @db.Date
+  description String
+  reference   String?
+  sourceId    String?               @map("source_id")
+  amountKobo  BigInt                @map("amount_kobo")
+  fingerprint String
+  contentHash String                @map("content_hash")
+  matches     ReconciliationMatch[]
+
+  allocations     LineAllocation[]
+  debitTransfers  InternalTransfer[] @relation("TransferDebit")
+  creditTransfers InternalTransfer[] @relation("TransferCredit")
+
+  @@id([tenantId, id])
+  @@unique([tenantId, importRowId])
+  @@index([tenantId, accountId, bookingDate, id])
+  @@index([tenantId, accountId, fingerprint])
+  @@map("statement_entries")
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  actorId       String    @map("actor_id") @db.Uuid
+  kind          String
+  targetId      String    @map("target_id") @db.Uuid
+  targetVersion Int       @map("target_version")
+  requestId     String    @map("request_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  deliveredAt   DateTime? @map("delivered_at") @db.Timestamptz(3)
+  completedAt   DateTime? @map("completed_at") @db.Timestamptz(3)
+  run           JobRun?
+
+  @@unique([tenantId, kind, targetId, targetVersion])
+  @@index([completedAt, deliveredAt, createdAt, id])
+  @@map("outbox_events")
+}
+
+model JobRun {
+  eventId     String      @id @map("event_id") @db.Uuid
+  event       OutboxEvent @relation(fields: [eventId], references: [id])
+  tenantId    String      @map("tenant_id") @db.Uuid
+  attempts    Int         @default(0)
+  leaseToken  String?     @map("lease_token") @db.Uuid
+  leaseUntil  DateTime?   @map("lease_until") @db.Timestamptz(3)
+  completedAt DateTime?   @map("completed_at") @db.Timestamptz(3)
+  failureCode String?     @map("failure_code")
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("job_runs")
+}
+
+model ReconciliationMatch {
+  tenantId       String           @map("tenant_id") @db.Uuid
+  id             String           @default(uuid()) @db.Uuid
+  entryId        String           @map("entry_id") @db.Uuid
+  entry          StatementEntry   @relation(fields: [tenantId, entryId], references: [tenantId, id])
+  expenseId      String?          @map("expense_id") @db.Uuid
+  expense        Expense?         @relation(fields: [tenantId, expenseId], references: [tenantId, id])
+  settlementId   String?          @map("settlement_id") @db.Uuid
+  settlement     Settlement?      @relation(fields: [tenantId, settlementId], references: [tenantId, id])
+  actorId        String           @map("actor_id") @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  version        Int              @default(1)
+  reversedAt     DateTime?        @map("reversed_at") @db.Timestamptz(3)
+  reversedBy     String?          @map("reversed_by") @db.Uuid
+  reversalReason String?          @map("reversal_reason")
+  allocations    LineAllocation[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, id, entryId])
+  @@index([tenantId, entryId, createdAt, id])
+  @@map("reconciliation_matches")
+}
+
+model LineAllocation {
+  tenantId   String               @map("tenant_id") @db.Uuid
+  id         String               @default(uuid()) @db.Uuid
+  entryId    String               @map("entry_id") @db.Uuid
+  entry      StatementEntry       @relation(fields: [tenantId, entryId], references: [tenantId, id])
+  matchId    String?              @map("match_id") @db.Uuid
+  match      ReconciliationMatch? @relation(fields: [tenantId, matchId, entryId], references: [tenantId, id, entryId])
+  releasedAt DateTime?            @map("released_at") @db.Timestamptz(3)
+  transferId String?              @map("transfer_id") @db.Uuid
+  transfer   InternalTransfer?    @relation(fields: [tenantId, transferId], references: [tenantId, id])
+
+  @@id([tenantId, id])
+  @@index([tenantId, entryId, releasedAt])
+  @@map("line_allocations")
+}
+
+model InternalTransfer {
+  tenantId       String           @map("tenant_id") @db.Uuid
+  id             String           @default(uuid()) @db.Uuid
+  debitEntryId   String           @map("debit_entry_id") @db.Uuid
+  creditEntryId  String           @map("credit_entry_id") @db.Uuid
+  debitEntry     StatementEntry   @relation("TransferDebit", fields: [tenantId, debitEntryId], references: [tenantId, id])
+  creditEntry    StatementEntry   @relation("TransferCredit", fields: [tenantId, creditEntryId], references: [tenantId, id])
+  actorId        String           @map("actor_id") @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  version        Int              @default(1)
+  reversedAt     DateTime?        @map("reversed_at") @db.Timestamptz(3)
+  reversedBy     String?          @map("reversed_by") @db.Uuid
+  reversalReason String?          @map("reversal_reason")
+  allocations    LineAllocation[]
+
+  @@id([tenantId, id])
+  @@index([tenantId, debitEntryId])
+  @@index([tenantId, creditEntryId])
+  @@map("internal_transfers")
+}
+
+enum ArtifactState {
+  QUEUED
+  READY
+  FAILED
+
+  @@map("artifact_state")
+}
+
+model EvidenceSnapshot {
+  tenantId     String    @map("tenant_id") @db.Uuid
+  id           String    @default(uuid()) @db.Uuid
+  workspace    Workspace @relation(fields: [tenantId], references: [id])
+  actorId      String    @map("actor_id") @db.Uuid
+  rulesVersion String    @map("rules_version")
+  asOf         DateTime  @map("as_of") @db.Timestamptz(3)
+  incomplete   Boolean
+  checksum     String
+  inputs       Json
+  artifact     Artifact?
+
+  @@id([tenantId, id])
+  @@index([tenantId, asOf, id])
+  @@map("evidence_snapshots")
+}
+
+model Artifact {
+  tenantId    String           @map("tenant_id") @db.Uuid
+  id          String           @map("snapshot_id") @db.Uuid
+  snapshot    EvidenceSnapshot @relation(fields: [tenantId, id], references: [tenantId, id])
+  state       ArtifactState    @default(QUEUED)
+  version     Int              @default(1)
+  objectKey   String?          @map("object_key")
+  digest      String?
+  bytes       Int?
+  expiresAt   DateTime?        @map("expires_at") @db.Timestamptz(3)
+  problemCode String?          @map("problem_code")
+
+  @@id([tenantId, id])
+  @@index([tenantId, state, expiresAt])
+  @@map("artifacts")
 }

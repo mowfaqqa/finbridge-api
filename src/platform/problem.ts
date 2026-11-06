@@ -24,6 +24,10 @@ export class ProblemFilter implements ExceptionFilter {
       const error = exception instanceof Error ? exception.name : 'UnknownError';
       this.logger.error({ requestId, method: request.method, status, code, error });
     }
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
     response.status(status).type('application/problem+json').json({
       type: `urn:finbridge:problem:${code.toLowerCase().replaceAll('_', '-')}`,
       title: problem?.title ?? STATUS_CODES[status] ?? 'Request failed',
