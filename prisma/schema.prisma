@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -58,6 +58,7 @@ model Workspace {
   createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   deletedAt   DateTime?           @map("deleted_at") @db.Timestamptz(3)
   memberships Membership[]
+  invitations Invitation[]
   auditEvents AuditEvent[]
   idempotency IdempotencyRecord[]
 
@@ -95,17 +96,33 @@ model IdempotencyRecord {
 }
 
 model AuditEvent {
-  id          String    @id @default(uuid()) @db.Uuid
-  tenantId    String    @map("tenant_id") @db.Uuid
-  workspace   Workspace @relation(fields: [tenantId], references: [id])
-  actorId     String    @map("actor_id") @db.Uuid
-  action      String
-  resourceId  String    @map("resource_id") @db.Uuid
-  version     Int?
-  requestId   String    @map("request_id") @db.Uuid
-  metadata    Json      @default("{}")
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  workspace  Workspace @relation(fields: [tenantId], references: [id])
+  actorId    String    @map("actor_id") @db.Uuid
+  action     String
+  resourceId String    @map("resource_id") @db.Uuid
+  version    Int?
+  requestId  String    @map("request_id") @db.Uuid
+  metadata   Json      @default("{}")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([tenantId, createdAt, id])
   @@map("audit_events")
+}
+
+model Invitation {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  workspace    Workspace     @relation(fields: [tenantId], references: [id])
+  email        String
+  role         WorkspaceRole
+  tokenHash    String        @unique @map("token_hash")
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt    DateTime      @map("expires_at") @db.Timestamptz(3)
+  redeemedAt   DateTime?     @map("redeemed_at") @db.Timestamptz(3)
+  supersededAt DateTime?     @map("superseded_at") @db.Timestamptz(3)
+
+  @@index([tenantId, email])
+  @@map("invitations")
 }

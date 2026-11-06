@@ -10,6 +10,8 @@ import { Problem } from '../platform/problem';
 import { mutationKey } from '../platform/transaction';
 import { Actor, SessionGuard, Sessions, type ActorIdentity } from './session';
 import { Workspaces } from './workspaces';
+import { Memberships } from './memberships';
+import { InvitationController, MembershipController } from './membership.controller';
 
 const localPersona = z.object({ persona: z.enum(['owner', 'operator', 'viewer', 'second-owner']) }).strict();
 const createWorkspace = z.object({
@@ -23,12 +25,15 @@ class SessionController {
   private readonly config = readConfig();
   private localWindow = { until: 0, count: 0 };
 
-  constructor(private readonly sessions: Sessions) {}
+  constructor(private readonly sessions: Sessions, private readonly memberships: Memberships) {}
 
   @Get('options')
-  @ApiOutput(200, z.object({ localSignIn: z.boolean() }))
+  @ApiOutput(200, z.object({ localSignIn: z.boolean(), invitationsEnabled: z.boolean() }))
   options() {
-    return { localSignIn: this.config.NODE_ENV !== 'production' && this.config.LOCAL_AUTH_ENABLED };
+    return {
+      localSignIn: this.config.NODE_ENV !== 'production' && this.config.LOCAL_AUTH_ENABLED,
+      invitationsEnabled: this.memberships.invitationsEnabled,
+    };
   }
 
   @Post('local-session')
@@ -91,8 +96,8 @@ class WorkspacesController {
 }
 
 @Module({
-  providers: [Sessions, SessionGuard, Workspaces],
+  providers: [Sessions, SessionGuard, Workspaces, Memberships],
   exports: [Sessions, SessionGuard, Workspaces],
-  controllers: [SessionController, WorkspacesController],
+  controllers: [SessionController, WorkspacesController, MembershipController, InvitationController],
 })
 export class IdentityModule {}

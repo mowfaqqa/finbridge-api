@@ -27,6 +27,7 @@ jobs:
     env:
       NODE_ENV: test
       LOCAL_AUTH_ENABLED: "true"
+      INVITATION_SECRET: finbridge_ci_invitation_secret_test_only
       DATABASE_URL: postgresql://finbridge_app:finbridge_local_app@127.0.0.1:55432/finbridge?schema=public
       DIRECT_URL: postgresql://finbridge_migrate:finbridge_local_migrate@127.0.0.1:55432/finbridge?schema=public
     steps:

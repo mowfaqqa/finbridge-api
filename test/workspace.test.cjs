@@ -123,3 +123,63 @@ test('OpenAPI publishes workspace write and response contracts', async () => {
   assert.equal(post.responses['201'].content['application/json'].schema.properties.role.enum[0], 'OWNER');
   assert.ok(post.parameters.some((parameter) => parameter.name === 'Idempotency-Key' && parameter.required));
 });
+
+test('invitations bind verified identity, supersede safely and grant only the selected workspace', async () => {
+  const owner = await signIn('owner');
+  const operator = await signIn('operator');
+  const viewer = await signIn('viewer');
+  const workspace = await createWorkspace(owner.cookie, 'Invite test');
+  const root = `/workspaces/${workspace.id}`;
+  const invite = async (email, role, key = randomUUID()) => {
+    const response = await request(`${root}/invitations`, { cookie: owner.cookie, key, body: { email, role } });
+    assert.equal(response.status, 201, await response.clone().text());
+    return response.json();
+  };
+  const accept = (cookie, token, key = randomUUID()) =>
+    request('/invitations/accept', { cookie, key, body: { token } });
+
+  const original = await invite('operator@finbridge.test', 'VIEWER');
+  const key = randomUUID();
+  const latest = await invite('operator@finbridge.test', 'OPERATOR', key);
+  assert.equal((await invite('operator@finbridge.test', 'OPERATOR', key)).token, latest.token);
+  assert.equal((await accept(operator.cookie, original.token)).status, 422);
+  assert.equal((await accept(viewer.cookie, latest.token)).status, 422);
+  const acceptKey = randomUUID();
+  const accepted = await accept(operator.cookie, latest.token, acceptKey);
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  assert.deepEqual(await accepted.json(), { ...workspace, role: 'OPERATOR' });
+  assert.equal((await accept(operator.cookie, latest.token, acceptKey)).status, 200);
+  assert.equal((await accept(operator.cookie, latest.token)).status, 422);
+  assert.equal((await request(`${root}/members`, { cookie: operator.cookie })).status, 403);
+
+  const expired = await invite('viewer@finbridge.test', 'VIEWER');
+  const db = new PrismaClient();
+  try {
+    await db.$transaction(async (tx) => {
+      await setContext(tx, owner.actor.id, workspace.id);
+      await tx.invitation.update({ where: { id: expired.id }, data: { expiresAt: new Date(0) } });
+    });
+  } finally {
+    await db.$disconnect();
+  }
+  assert.equal((await accept(viewer.cookie, expired.token)).status, 422);
+
+  const revoke = (userId) => request(`${root}/members/${userId}/revoke`, {
+    cookie: owner.cookie, key: randomUUID(), body: { version: 1, reason: 'Access removed in test' },
+  });
+  assert.equal((await revoke(owner.actor.id)).status, 409);
+  assert.equal((await revoke(operator.actor.id)).status, 200);
+  assert.equal((await request(root, { cookie: operator.cookie })).status, 404);
+  assert.equal((await accept(operator.cookie, latest.token, acceptKey)).status, 422);
+
+  const pending = await invite('viewer@finbridge.test', 'VIEWER');
+  const transfer = () => request(`${root}/transfer-ownership`, {
+    cookie: owner.cookie, key: randomUUID(), body: { version: 1, userId: viewer.actor.id },
+  });
+  assert.equal((await transfer()).status, 422);
+  assert.equal((await accept(viewer.cookie, pending.token)).status, 200);
+  const transferred = await transfer();
+  assert.equal(transferred.status, 200, await transferred.clone().text());
+  assert.equal((await (await request(root, { cookie: viewer.cookie })).json()).role, 'OWNER');
+  assert.equal((await request(`${root}/members`, { cookie: owner.cookie })).status, 403);
+});

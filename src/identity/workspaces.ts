@@ -3,10 +3,10 @@ import type { Workspace, WorkspaceRole } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { Database } from '../platform/database';
 import { Problem } from '../platform/problem';
-import { audit, idempotent, setContext, type Tx } from '../platform/transaction';
+import { audit, idempotent, lockScope, setContext, type Tx } from '../platform/transaction';
 import type { ActorIdentity } from './session';
 
-const summary = (workspace: Workspace, role: WorkspaceRole) => ({
+export const workspaceSummary = (workspace: Workspace, role: WorkspaceRole) => ({
   id: workspace.id, slug: workspace.slug, displayName: workspace.displayName, sector: workspace.sector,
   role, version: workspace.version,
 });
@@ -23,7 +23,7 @@ export class Workspaces {
         include: { workspace: true },
         orderBy: [{ workspace: { displayName: 'asc' } }, { tenantId: 'asc' }],
       });
-      return memberships.map((membership) => summary(membership.workspace, membership.role));
+      return memberships.map((membership) => workspaceSummary(membership.workspace, membership.role));
     });
   }
 
@@ -40,7 +40,7 @@ export class Workspaces {
         });
         await tx.membership.create({ data: { tenantId: id, userId: actor.id, role: 'OWNER' } });
         await audit(tx, id, actor.id, requestId, 'workspace_created', id, 1);
-        return summary(workspace, 'OWNER');
+        return workspaceSummary(workspace, 'OWNER');
       });
       await setContext(tx, actor.id);
       const active = await tx.membership.findFirst({
@@ -55,7 +55,7 @@ export class Workspaces {
   async get(actor: ActorIdentity, tenantId: string) {
     return this.run(actor, tenantId, undefined, async (tx, role) => {
       const workspace = await tx.workspace.findUniqueOrThrow({ where: { id: tenantId } });
-      return summary(workspace, role);
+      return workspaceSummary(workspace, role);
     });
   }
 
@@ -64,6 +64,7 @@ export class Workspaces {
     tenantId: string,
     allowed: readonly WorkspaceRole[] | undefined,
     action: (tx: Tx, role: WorkspaceRole) => Promise<T>,
+    manageMembership = false,
   ): Promise<T> {
     return this.database.$transaction(async (tx) => {
       await setContext(tx, actor.id);
@@ -74,6 +75,7 @@ export class Workspaces {
       if (!visible) throw this.invisible();
 
       await setContext(tx, actor.id, tenantId);
+      if (manageMembership) await lockScope(tx, `memberships/${tenantId}`);
       const [membership] = await tx.$queryRaw<{ role: WorkspaceRole }[]>`
         SELECT m.role FROM memberships m JOIN workspaces w ON w.id = m.tenant_id
         WHERE m.tenant_id = ${tenantId}::uuid AND m.user_id = ${actor.id}::uuid

@@ -22,6 +22,14 @@ function canonical(value: Prisma.InputJsonValue): string {
 
 export const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 
+export async function lockScope(tx: Tx, scope: string) {
+  await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${scope}, 0))`;
+}
+
+export function requestId(request: Request) {
+  return String(request.res?.getHeader('x-request-id'));
+}
+
 export function mutationKey(request: Request) {
   const key = request.get('idempotency-key');
   if (!key || !/^[A-Za-z0-9._~-]{1,128}$/.test(key)) {
@@ -36,7 +44,7 @@ export async function idempotent<T extends Prisma.InputJsonValue>(
 ) {
   const scope = `${actorId}/${tenantId ?? 'global'}/${operation}`;
   const requestHash = digest(canonical(input));
-  await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${`${scope}/${key}`}, 0))`;
+  await lockScope(tx, `idempotency/${scope}/${key}`);
   const where = { scope_key: { scope, key } };
   const existing = await tx.idempotencyRecord.findUnique({ where });
   if (existing && existing.expiresAt > new Date()) {

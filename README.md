@@ -20,3 +20,5 @@ Start the local database with `docker compose up -d --wait postgres`. For a nati
 The local identity picker is enabled by `LOCAL_AUTH_ENABLED=true` and is unavailable in production. Writes require an `Origin` that matches `WEB_ORIGIN`. The application connects as `finbridge_app`, a non-owner role without `BYPASSRLS`.
 
 With a dedicated local or CI database, run `pnpm build && pnpm test:integration`. The tests create synthetic workspaces to verify idempotency, session rotation, tenant isolation and OpenAPI. Export the contract without starting the server with `pnpm --silent api:export` after building.
+
+For local membership testing, invite `operator@finbridge.test` or `viewer@finbridge.test` as the owner. Open the invitation link in a separate browser session and choose its matching local identity. Creating a replacement link invalidates the previous pending link. The link is presented in the UI for the owner to share.
