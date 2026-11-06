@@ -2,10 +2,11 @@ import 'reflect-metadata';
 import { logWorker, startJobs } from './jobs/runner';
 import { ObjectStorage } from './platform/storage';
 import { importHandlers } from './statements/import-worker';
+import { evidenceHandlers } from "./reporting/evidence-worker";
 
 try {
   const storage = new ObjectStorage();
-  const runtime = startJobs(importHandlers(storage));
+  const runtime = startJobs({ ...importHandlers(storage), ...evidenceHandlers(storage) });
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
     void runtime.stop().then(() => storage.onModuleDestroy()).catch(() => {
       logWorker('worker_shutdown_failed');

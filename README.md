@@ -34,3 +34,7 @@ Start local PostgreSQL and Redis with `docker compose up -d --wait`. For a nativ
 The canonical UTF-8 CSV header is `date,description,amount,reference,source_id`. Use an ISO date and a signed NGN amount such as `-25000.01`. Select an account and confirm the inclusive source coverage before validation. Review the staged rows and resolve each ambiguous duplicate before publishing. Reports use published rows and confirmed coverage only.
 
 For integration tests, keep PostgreSQL and Redis running. The tests start an isolated temporary object store and inject a transient read failure to verify worker retry.
+
+## Readiness evidence
+
+Open **Readiness** as an owner or finance operator. Generation captures the current three-month evidence in one database snapshot and queues PDF rendering. The worker embeds IBM Plex Sans from `assets/fonts` under the included OFL license. Keep that directory with the deployed worker. Downloads are authorised per request and expire after 24 hours.

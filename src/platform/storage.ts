@@ -24,12 +24,12 @@ export class ObjectStorage implements OnModuleDestroy {
     }), { abortSignal: AbortSignal.timeout(20_000) });
   }
 
-  async open(key: string) {
-    const result = await this.client.send(new GetObjectCommand({ Bucket: this.config.S3_BUCKET, Key: key }), {
+  async open(key: string, range?: string) {
+    const result = await this.client.send(new GetObjectCommand({ Bucket: this.config.S3_BUCKET, Key: key, Range: range }), {
       abortSignal: AbortSignal.timeout(20_000),
     });
     if (!result.Body) throw new Error('Object is unavailable');
-    return { body: result.Body as Readable, contentLength: result.ContentLength };
+    return { body: result.Body as Readable, contentLength: result.ContentLength, contentRange: result.ContentRange };
   }
 
   async remove(key: string) {

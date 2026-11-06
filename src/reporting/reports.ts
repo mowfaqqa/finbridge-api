@@ -86,7 +86,7 @@ type Aggregate = {
   month: string; inflow: string; outflow: string; unmatched: number; nonTransfer: number; matched: number;
 };
 
-export async function readCashFlow(tx: Tx, tenantId: string, period: Period, now: Date, requested?: string[]) {
+export async function readCashFlow(tx: Tx, tenantId: string, period: Period, now: Date, requested?: string[], sourceLimit?: number) {
   if (period.start > period.end || calendar(period.end) >= shiftMonths(period.start, 12).getTime()) {
     throw new Problem(422, 'REPORT_PERIOD_INVALID', 'Choose an inclusive range of up to 12 months');
   }
@@ -104,7 +104,11 @@ export async function readCashFlow(tx: Tx, tenantId: string, period: Period, now
       coverageStart: { lte: bounds.end }, coverageEnd: { gte: bounds.start },
     },
     select: { id: true, accountId: true, coverageStart: true, coverageEnd: true }, orderBy: [{ coverageStart: 'asc' }, { id: 'asc' }],
+    take: sourceLimit === undefined ? undefined : sourceLimit + 1,
   });
+  if (sourceLimit !== undefined && batches.length > sourceLimit) {
+    throw new Problem(422, 'EVIDENCE_SOURCE_LIMIT', 'This workspace exceeds the source limit for one evidence pack');
+  }
   const latest = await tx.importBatch.groupBy({
     by: ['accountId'], where: { tenantId, accountId: { in: ids }, state: 'COMMITTED' }, _max: { committedAt: true },
   });

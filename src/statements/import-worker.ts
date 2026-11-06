@@ -1,5 +1,6 @@
 import type { ImportBatch, ImportRow, OutboxEvent, Prisma } from '@prisma/client';
 import { fromDateOnly } from '../financial/money';
+import { hasJobAuthority } from '../jobs/authority';
 import { type Handler, TerminalJobError } from '../jobs/runner';
 import type { ObjectStorage } from '../platform/storage';
 import { audit, lockScope, setContext, type Tx } from '../platform/transaction';
@@ -15,14 +16,7 @@ function eligible(batch: ImportBatch, event: OutboxEvent) {
 }
 
 async function authorize(tx: Tx, event: OutboxEvent, accountId: string, serial: boolean) {
-  if (serial) await lockScope(tx, `memberships/${event.tenantId}`);
-  const authorized = await tx.membership.findFirst({
-    where: {
-      tenantId: event.tenantId, userId: event.actorId, revokedAt: null, role: { in: ['OWNER', 'OPERATOR'] },
-      workspace: { deletedAt: null, kind: 'SME' },
-    },
-    select: { userId: true },
-  });
+  const authorized = await hasJobAuthority(tx, event, serial);
   const account = await tx.bankAccount.findFirst({ where: { tenantId: event.tenantId, id: accountId, active: true }, select: { id: true } });
   if (!authorized || !account) throw new TerminalJobError('IMPORT_PERMISSION_REVOKED');
 }

@@ -9,6 +9,8 @@ const { PrismaClient } = require('@prisma/client');
 const { createApp } = require('../dist/app');
 const { ObjectStorage } = require('../dist/platform/storage');
 const { startJobs } = require('../dist/jobs/runner');
+const { evidenceHandlers } = require('../dist/reporting/evidence-worker');
+const { completedMonths } = require('../dist/reporting/reports');
 const { importHandlers } = require('../dist/statements/import-worker');
 const { setContext } = require('../dist/platform/transaction');
 
@@ -417,12 +419,12 @@ test('statement accounts store masked identifiers and enforce workspace-scoped v
 test('statement publication resolves ambiguous rows, replays exact files and revalidates stale previews', async (t) => {
   const storage = new ObjectStorage();
   let injectedFailures = 0;
-  const jobs = startJobs(importHandlers({
+  const jobs = startJobs({ ...evidenceHandlers(storage), ...importHandlers({
     open(key) {
       if (injectedFailures++ === 0) throw new Error('Injected object-store interruption');
       return storage.open(key);
     },
-  }));
+  }) });
   const db = new PrismaClient();
   try {
     const owner = await signIn('owner');
@@ -437,9 +439,9 @@ test('statement publication resolves ambiguous rows, replays exact files and rev
     const coverage = { coverageStart: '2026-10-01', coverageEnd: '2026-10-31' };
     const mapping = { date: 0, description: 1, dateFormat: 'ISO', money: { mode: 'signed', amount: 2 }, reference: 3, sourceId: 4 };
 
-    const uploaded = async (text, accountId = account.id) => {
+    const uploaded = async (text, accountId = account.id, scope = root) => {
       const file = Buffer.from(text);
-      const response = await command(`${root}/imports`, { accountId, filename: 'statement.csv', bytes: file.length });
+      const response = await command(`${scope}/imports`, { accountId, filename: 'statement.csv', bytes: file.length });
       assert.equal(response.status, 201, await response.clone().text());
       const ticket = await response.json();
       const payload = await fetch(base + ticket.uploadUrl, {
@@ -448,19 +450,19 @@ test('statement publication resolves ambiguous rows, replays exact files and rev
       assert.equal(payload.status, 200, await payload.clone().text());
       return payload.json();
     };
-    const load = async (id) => (await request(`${root}/imports/${id}`, { cookie: owner.cookie })).json();
-    const wait = async (id, state) => {
+    const load = async (id, scope = root) => (await request(`${scope}/imports/${id}`, { cookie: owner.cookie })).json();
+    const wait = async (id, state, scope = root) => {
       const end = Date.now() + 12_000;
       while (Date.now() < end) {
-        const batch = await load(id);
+        const batch = await load(id, scope);
         if (batch.state === state) return batch;
         if (batch.state === 'FAILED') assert.fail(JSON.stringify(batch));
         await new Promise((resolve) => setTimeout(resolve, 70));
       }
-      assert.fail(`Expected ${state}: ${JSON.stringify(await load(id))}`);
+      assert.fail(`Expected ${state}: ${JSON.stringify(await load(id, scope))}`);
     };
-    const validate = (batch, override = mapping) => command(`${root}/imports/${batch.id}/validate`, { ...coverage, mapping: override, version: batch.version });
-    const commit = (batch, key) => command(`${root}/imports/${batch.id}/commit`, { version: batch.version }, 'POST', key);
+    const validate = (batch, override = mapping, scope = root, dates = coverage) => command(`${scope}/imports/${batch.id}/validate`, { ...dates, mapping: override, version: batch.version });
+    const commit = (batch, key, scope = root) => command(`${scope}/imports/${batch.id}/commit`, { version: batch.version }, 'POST', key);
     const rows = async (id) => (await (await request(`${root}/imports/${id}/rows`, { cookie: owner.cookie })).json()).items;
     const countEntries = () => db.$transaction(async (tx) => {
       await setContext(tx, owner.actor.id, workspace.id);
@@ -633,6 +635,91 @@ test('statement publication resolves ambiguous rows, replays exact files and rev
         assert.equal(row.status, 'UNMATCHED');
         assert.equal(row.transfers[0].reversalReason, 'Incorrect transfer pair');
       }
+    });
+    await t.test('readiness exports immutable snapshots, authorized ranges, and complete or labelled incomplete evidence', async () => {
+      const get = (path, cookie = owner.cookie) => request(path, { cookie }).then((response) => response.json());
+      const evidencePath = `${root}/evidence`;
+      const queuePack = (path, confirmIncomplete, key = randomUUID()) => command(path, { confirmIncomplete }, 'POST', key);
+      const waitPack = async (path, id) => {
+        const end = Date.now() + 12_000;
+        while (Date.now() < end) {
+          const row = await get(`${path}/${id}`);
+          if (row.state === 'READY') return row;
+          if (row.state === 'FAILED') assert.fail(row.problemCode);
+          await new Promise((resolve) => setTimeout(resolve, 70));
+        }
+        assert.fail('Evidence render did not finish');
+      };
+      const initial = await get(`${evidencePath}/readiness`);
+      assert.equal(initial.incomplete, true);
+      assert.equal((await queuePack(evidencePath, false)).status, 422);
+      const key = randomUUID();
+      const [queued, replay] = await Promise.all([queuePack(evidencePath, true, key), queuePack(evidencePath, true, key)]);
+      for (const response of [queued, replay]) assert.equal(response.status, 202, await response.clone().text());
+      const { id } = await queued.json();
+      assert.equal((await replay.json()).id, id);
+      const ready = await waitPack(evidencePath, id);
+      assert.equal(ready.incomplete, true);
+      assert.ok(ready.checksum.match(/^[0-9a-f]{64}$/));
+      assert.equal(ready.evidence.rulesVersion, '1.0');
+
+      const download = (cookie, range) => fetch(`${base}/api/v1${evidencePath}/${id}/download`, {
+        headers: { Cookie: cookie, ...(range && { Range: range }) },
+      });
+      const pdf = await download(owner.cookie);
+      assert.equal(pdf.status, 200, await pdf.clone().text());
+      const original = Buffer.from(await pdf.arrayBuffer());
+      assert.equal(original.subarray(0, 5).toString(), '%PDF-');
+      const slice = await download(owner.cookie, 'bytes=0-4');
+      assert.equal(slice.status, 206, await slice.clone().text());
+      assert.equal(await slice.text(), '%PDF-');
+      assert.equal((await download(other.cookie, 'bytes=0-4')).status, 404);
+
+      const viewer = await signIn('viewer');
+      const invitation = await (await command(`${root}/invitations`, { email: viewer.actor.verifiedEmail, role: 'VIEWER' })).json();
+      assert.equal((await request('/invitations/accept', { cookie: viewer.cookie, key: randomUUID(), body: { token: invitation.token } })).status, 200);
+      assert.equal((await download(viewer.cookie, 'bytes=0-4')).status, 403);
+
+      const period = completedMonths(new Date());
+      const dates = { coverageStart: period.start, coverageEnd: period.end };
+      const extra = await uploaded(header + `${period.start},New observed credit,123.45,,pack-extra\n`);
+      assert.equal((await validate(extra, mapping, root, dates)).status, 202);
+      assert.equal((await commit(await wait(extra.id, 'REVIEW'))).status, 202);
+      await wait(extra.id, 'COMMITTED');
+      const refreshed = await queuePack(evidencePath, true);
+      assert.equal(refreshed.status, 202, await refreshed.clone().text());
+      const fresh = await waitPack(evidencePath, (await refreshed.json()).id);
+      assert.notEqual(fresh.checksum, ready.checksum);
+      assert.equal(BigInt(fresh.evidence.cashFlow.totals.inflowKobo) - BigInt(ready.evidence.cashFlow.totals.inflowKobo), 12345n);
+      const unchanged = await get(`${evidencePath}/${id}`);
+      assert.deepEqual(unchanged.evidence, ready.evidence);
+      assert.deepEqual(Buffer.from(await (await download(owner.cookie)).arrayBuffer()), original);
+
+      const emptyWorkspace = await createWorkspace(owner.cookie, 'Complete evidence test');
+      const emptyRoot = `/workspaces/${emptyWorkspace.id}`;
+      const emptyAccount = await (await command(`${emptyRoot}/accounts`, { label: 'No transactions account' })).json();
+      const emptyImport = await uploaded(header, emptyAccount.id, emptyRoot);
+      assert.equal((await validate(emptyImport, mapping, emptyRoot, dates)).status, 202);
+      assert.equal((await commit(await wait(emptyImport.id, 'REVIEW', emptyRoot), undefined, emptyRoot)).status, 202);
+      await wait(emptyImport.id, 'COMMITTED', emptyRoot);
+      const emptyEvidence = `${emptyRoot}/evidence`;
+      const completeRequest = await queuePack(emptyEvidence, false);
+      assert.equal(completeRequest.status, 202, await completeRequest.clone().text());
+      const complete = await waitPack(emptyEvidence, (await completeRequest.json()).id);
+      assert.equal(complete.incomplete, false);
+      assert.equal(complete.evidence.checks.find((check) => check.key === 'matching').detail, 'No transactions to review');
+
+      const workerDb = new PrismaClient({ datasourceUrl: process.env.WORKER_DATABASE_URL });
+      try {
+        await workerDb.$transaction(async (tx) => {
+          await setContext(tx, owner.actor.id, workspace.id);
+          await tx.artifact.update({ where: { tenantId_id: { tenantId: workspace.id, id } }, data: { expiresAt: new Date(0) } });
+        });
+      } finally {
+        await workerDb.$disconnect();
+      }
+      assert.equal((await get(`${evidencePath}/${id}`)).state, 'EXPIRED');
+      assert.equal((await download(owner.cookie, 'bytes=0-4')).status, 404);
     });
   } finally {
     await jobs.stop();

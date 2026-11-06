@@ -70,6 +70,8 @@ model Workspace {
 
   bankAccounts BankAccount[]
 
+  evidenceSnapshots EvidenceSnapshot[]
+
   @@map("workspaces")
 }
 
@@ -492,4 +494,46 @@ model InternalTransfer {
   @@index([tenantId, debitEntryId])
   @@index([tenantId, creditEntryId])
   @@map("internal_transfers")
+}
+
+enum ArtifactState {
+  QUEUED
+  READY
+  FAILED
+
+  @@map("artifact_state")
+}
+
+model EvidenceSnapshot {
+  tenantId     String    @map("tenant_id") @db.Uuid
+  id           String    @default(uuid()) @db.Uuid
+  workspace    Workspace @relation(fields: [tenantId], references: [id])
+  actorId      String    @map("actor_id") @db.Uuid
+  rulesVersion String    @map("rules_version")
+  asOf         DateTime  @map("as_of") @db.Timestamptz(3)
+  incomplete   Boolean
+  checksum     String
+  inputs       Json
+  artifact     Artifact?
+
+  @@id([tenantId, id])
+  @@index([tenantId, asOf, id])
+  @@map("evidence_snapshots")
+}
+
+model Artifact {
+  tenantId    String           @map("tenant_id") @db.Uuid
+  id          String           @map("snapshot_id") @db.Uuid
+  snapshot    EvidenceSnapshot @relation(fields: [tenantId, id], references: [tenantId, id])
+  state       ArtifactState    @default(QUEUED)
+  version     Int              @default(1)
+  objectKey   String?          @map("object_key")
+  digest      String?
+  bytes       Int?
+  expiresAt   DateTime?        @map("expires_at") @db.Timestamptz(3)
+  problemCode String?          @map("problem_code")
+
+  @@id([tenantId, id])
+  @@index([tenantId, state, expiresAt])
+  @@map("artifacts")
 }
