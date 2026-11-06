@@ -679,6 +679,12 @@ test('statement publication resolves ambiguous rows, replays exact files and rev
       const invitation = await (await command(`${root}/invitations`, { email: viewer.actor.verifiedEmail, role: 'VIEWER' })).json();
       assert.equal((await request('/invitations/accept', { cookie: viewer.cookie, key: randomUUID(), body: { token: invitation.token } })).status, 200);
       assert.equal((await download(viewer.cookie, 'bytes=0-4')).status, 403);
+      const auditLog = `${root}/audit-events?q=evidence_downloaded`;
+      assert.equal((await request(auditLog, { cookie: viewer.cookie })).status, 403);
+      assert.equal((await request(auditLog, { cookie: other.cookie })).status, 404);
+      const auditPage = await get(auditLog);
+      assert.equal(auditPage.items.length, 2);
+      assert.ok(auditPage.items.every((event) => event.resourceId === id && event.actorId === owner.actor.id));
 
       const period = completedMonths(new Date());
       const dates = { coverageStart: period.start, coverageEnd: period.end };
