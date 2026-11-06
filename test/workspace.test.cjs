@@ -288,3 +288,29 @@ test('invoice issue preserves exact totals, snapshots, monotonic numbers and ide
   assert.equal(voidView.number, 'INV-001');
   assert.equal(voidView.outstandingKobo, null);
 });
+
+test('expenses use positive exact kobo and versioned, reasoned voids', async () => {
+  const owner = await signIn('owner');
+  const workspace = await createWorkspace(owner.cookie, 'Expenses test');
+  const root = `/workspaces/${workspace.id}/expenses`;
+  const command = (path, body, method = 'POST', key = randomUUID()) =>
+    request(path, { cookie: owner.cookie, method, key, body });
+  const input = { payee: 'Office supplies', category: 'SUPPLIES', date: '2026-11-01', amountKobo: '2500001' };
+  assert.equal((await command(root, { ...input, amountKobo: '0' })).status, 422);
+  assert.equal((await command(root, { ...input, date: '2026-02-29' })).status, 422);
+  const key = randomUUID();
+  const created = await command(root, input, 'POST', key);
+  assert.equal(created.status, 201, await created.clone().text());
+  const expense = await created.json();
+  assert.equal(expense.amountKobo, '2500001');
+  assert.equal(expense.currency, 'NGN');
+  assert.equal((await (await command(root, input, 'POST', key)).json()).id, expense.id);
+  const id = `${root}/${expense.id}`;
+  assert.equal((await command(id, { version: 1, reference: 'SR-001' }, 'PATCH')).status, 200);
+  assert.equal((await command(`${id}/void`, { version: 1, reason: 'Incorrect entry' })).status, 409);
+  assert.equal((await command(`${id}/void`, { version: 2, reason: '' })).status, 422);
+  const voided = await command(`${id}/void`, { version: 2, reason: 'Incorrect entry' });
+  assert.equal(voided.status, 200, await voided.clone().text());
+  assert.equal((await voided.json()).status, 'VOID');
+  assert.equal((await command(id, { version: 3, amountKobo: '2500000' }, 'PATCH')).status, 409);
+});

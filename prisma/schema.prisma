@@ -66,6 +66,8 @@ model Workspace {
   invoices       Invoice[]
   invoiceCounter InvoiceCounter?
 
+  expenses Expense[]
+
   @@map("workspaces")
 }
 
@@ -200,4 +202,42 @@ model InvoiceCounter {
   lastNumber BigInt    @map("last_number")
 
   @@map("invoice_counters")
+}
+
+enum ExpenseCategory {
+  SUPPLIES
+  RENT_AND_UTILITIES
+  TRANSPORT
+  PAYROLL
+  FEES
+  OTHER
+
+  @@map("expense_category")
+}
+
+enum ExpenseStatus {
+  ACTIVE
+  VOID
+
+  @@map("expense_status")
+}
+
+model Expense {
+  tenantId    String          @map("tenant_id") @db.Uuid
+  id          String          @default(uuid()) @db.Uuid
+  workspace   Workspace       @relation(fields: [tenantId], references: [id])
+  expenseDate DateTime        @map("expense_date") @db.Date
+  payee       String
+  category    ExpenseCategory
+  reference   String?
+  amountKobo  BigInt          @map("amount_kobo")
+  status      ExpenseStatus   @default(ACTIVE)
+  version     Int             @default(1)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  voidedAt    DateTime?       @map("voided_at") @db.Timestamptz(3)
+  voidReason  String?         @map("void_reason")
+
+  @@id([tenantId, id])
+  @@index([tenantId, expenseDate, id])
+  @@map("expenses")
 }
