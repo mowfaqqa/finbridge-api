@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: finbridge_local_bootstrap
+      POSTGRES_DB: finbridge
+    ports:
+      - '127.0.0.1:55432:5432'
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./infra/local-postgres.sql:/docker-entrypoint-initdb.d/10-finbridge.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d finbridge']
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres:
