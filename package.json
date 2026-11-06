@@ -2,7 +2,9 @@
   "name": "finbridge-api",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=22.12" },
+  "engines": {
+    "node": ">=22.12"
+  },
   "packageManager": "pnpm@10.18.2",
   "scripts": {
     "dev": "node --env-file-if-exists=.env --watch -r ts-node/register src/main.ts",
@@ -10,7 +12,9 @@
     "start": "node --env-file-if-exists=.env dist/main.js",
     "db:deploy": "prisma migrate deploy",
     "prisma:generate": "prisma generate",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "api:export": "node --env-file-if-exists=.env dist/export-openapi.js",
+    "test:integration": "node --env-file-if-exists=.env --test test/*.test.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",

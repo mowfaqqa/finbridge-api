@@ -6,6 +6,7 @@ const env = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   WEB_ORIGIN: z.url({ protocol: /^https?$/ }).default('http://localhost:3000'),
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
+  LOCAL_AUTH_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
 });
 
 export function readConfig() {

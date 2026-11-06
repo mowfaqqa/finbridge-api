@@ -8,8 +8,27 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-and-integration:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: finbridge_local_bootstrap
+          POSTGRES_DB: finbridge
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d finbridge"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      NODE_ENV: test
+      LOCAL_AUTH_ENABLED: "true"
+      DATABASE_URL: postgresql://finbridge_app:finbridge_local_app@127.0.0.1:55432/finbridge?schema=public
+      DIRECT_URL: postgresql://finbridge_migrate:finbridge_local_migrate@127.0.0.1:55432/finbridge?schema=public
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -18,4 +37,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: psql -h 127.0.0.1 -p 55432 -U postgres -d finbridge -v ON_ERROR_STOP=1 -f infra/local-postgres.sql
+        env:
+          PGPASSWORD: finbridge_local_bootstrap
+      - run: pnpm db:deploy
       - run: pnpm build
+      - run: pnpm test:integration

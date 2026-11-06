@@ -7,3 +7,105 @@ datasource db {
   url      = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
+
+enum WorkspaceKind {
+  SME
+  BANK
+
+  @@map("workspace_kind")
+}
+
+enum WorkspaceRole {
+  OWNER
+  OPERATOR
+  VIEWER
+
+  @@map("workspace_role")
+}
+
+model User {
+  id            String       @id @default(uuid()) @db.Uuid
+  issuer        String
+  subject       String
+  verifiedEmail String?      @map("verified_email")
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  sessions      Session[]
+  memberships   Membership[]
+
+  @@unique([issuer, subject])
+  @@map("users")
+}
+
+model Session {
+  tokenHash String    @id @map("token_hash")
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id])
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Workspace {
+  id          String              @id @default(uuid()) @db.Uuid
+  slug        String              @unique
+  kind        WorkspaceKind       @default(SME)
+  displayName String              @map("display_name")
+  sector      String?
+  version     Int                 @default(1)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt   DateTime?           @map("deleted_at") @db.Timestamptz(3)
+  memberships Membership[]
+  auditEvents AuditEvent[]
+  idempotency IdempotencyRecord[]
+
+  @@map("workspaces")
+}
+
+model Membership {
+  tenantId  String        @map("tenant_id") @db.Uuid
+  userId    String        @map("user_id") @db.Uuid
+  workspace Workspace     @relation(fields: [tenantId], references: [id])
+  user      User          @relation(fields: [userId], references: [id])
+  role      WorkspaceRole
+  version   Int           @default(1)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  revokedAt DateTime?     @map("revoked_at") @db.Timestamptz(3)
+
+  @@id([tenantId, userId])
+  @@index([userId, tenantId])
+  @@map("memberships")
+}
+
+model IdempotencyRecord {
+  scope       String
+  key         String
+  requestHash String     @map("request_hash")
+  actorId     String     @map("actor_id") @db.Uuid
+  tenantId    String?    @map("tenant_id") @db.Uuid
+  workspace   Workspace? @relation(fields: [tenantId], references: [id])
+  outcome     Json
+  expiresAt   DateTime   @map("expires_at") @db.Timestamptz(3)
+
+  @@id([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}
+
+model AuditEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  workspace   Workspace @relation(fields: [tenantId], references: [id])
+  actorId     String    @map("actor_id") @db.Uuid
+  action      String
+  resourceId  String    @map("resource_id") @db.Uuid
+  version     Int?
+  requestId   String    @map("request_id") @db.Uuid
+  metadata    Json      @default("{}")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([tenantId, createdAt, id])
+  @@map("audit_events")
+}
