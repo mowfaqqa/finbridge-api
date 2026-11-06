@@ -18,15 +18,15 @@ const createBody = z.object({ ...fields, reference: fields.reference.optional(),
 const reverseBody = z.object({ version, reason: z.string().trim().min(1).max(250) }).strict();
 const settlementView = z.object({
   ...fields, id: uuid, invoiceId: uuid, currency: z.literal('NGN'), source: z.enum(['MANUAL', 'STATEMENT']),
-  version, reversedAt: dateTime.nullable(), reversalReason: z.string().nullable(),
+  version, verified: z.boolean(), reversedAt: dateTime.nullable(), reversalReason: z.string().nullable(),
 });
 const querySchema = listQuery.omit({ q: true }).refine((query) => !(query.after && query.before), {
   message: 'Use either the next or previous cursor',
 });
-const view = (row: Settlement) => ({
+const view = (row: Settlement & { matches?: { id: string }[] }) => ({
   id: row.id, invoiceId: row.invoiceId, amountKobo: row.amountKobo.toString(), currency: 'NGN' as const,
   source: row.source, receiptDate: fromDateOnly(row.receiptDate), reference: row.reference,
-  version: row.version, reversedAt: row.reversedAt?.toISOString() ?? null, reversalReason: row.reversalReason,
+  version: row.version, verified: !!row.matches?.length, reversedAt: row.reversedAt?.toISOString() ?? null, reversalReason: row.reversalReason,
 });
 
 export async function addSettlement(
@@ -72,7 +72,7 @@ export class SettlementsController {
         throw new Problem(404, 'INVOICE_NOT_FOUND', 'Invoice unavailable');
       }
       const rows = await tx.settlement.findMany({
-        where: { tenantId, invoiceId }, orderBy: [{ receiptDate: direction }, { id: direction }], take: query.limit + 1,
+        where: { tenantId, invoiceId }, include: { matches: { where: { reversedAt: null }, select: { id: true } } }, orderBy: [{ receiptDate: direction }, { id: direction }], take: query.limit + 1,
         ...(cursor && { cursor: { tenantId_id: { tenantId, id: cursor } }, skip: 1 }),
       });
       return pageResult(rows.map(view), query);
@@ -119,6 +119,9 @@ export class SettlementsController {
           throw new Problem(409, 'SETTLEMENT_CONFLICT', 'Refresh the settlement before reversing it');
         }
         if (current.source !== 'MANUAL') throw new Problem(409, 'REVERSE_MATCH_FIRST', 'Reverse the statement match to correct this settlement');
+        if (await tx.reconciliationMatch.findFirst({ where: { tenantId, settlementId: id, reversedAt: null }, select: { id: true } })) {
+          throw new Problem(409, 'REVERSE_MATCH_FIRST', 'Reverse the active statement match before correcting this receipt');
+        }
         const row = await reverseSettlement(tx, tenantId, id, actor.id, input.reason);
         await audit(tx, tenantId, actor.id, requestId(req), 'settlement_reversed', id, row.version, { reason: input.reason, invoiceId: existing.invoiceId });
         return view(row);

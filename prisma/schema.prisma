@@ -228,19 +228,20 @@ enum ExpenseStatus {
 }
 
 model Expense {
-  tenantId    String          @map("tenant_id") @db.Uuid
-  id          String          @default(uuid()) @db.Uuid
-  workspace   Workspace       @relation(fields: [tenantId], references: [id])
-  expenseDate DateTime        @map("expense_date") @db.Date
+  tenantId    String                @map("tenant_id") @db.Uuid
+  id          String                @default(uuid()) @db.Uuid
+  workspace   Workspace             @relation(fields: [tenantId], references: [id])
+  expenseDate DateTime              @map("expense_date") @db.Date
   payee       String
   category    ExpenseCategory
   reference   String?
-  amountKobo  BigInt          @map("amount_kobo")
-  status      ExpenseStatus   @default(ACTIVE)
-  version     Int             @default(1)
-  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  voidedAt    DateTime?       @map("voided_at") @db.Timestamptz(3)
-  voidReason  String?         @map("void_reason")
+  amountKobo  BigInt                @map("amount_kobo")
+  status      ExpenseStatus         @default(ACTIVE)
+  version     Int                   @default(1)
+  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  voidedAt    DateTime?             @map("voided_at") @db.Timestamptz(3)
+  voidReason  String?               @map("void_reason")
+  matches     ReconciliationMatch[]
 
   @@id([tenantId, id])
   @@index([tenantId, expenseDate, id])
@@ -255,20 +256,21 @@ enum SettlementSource {
 }
 
 model Settlement {
-  tenantId       String           @map("tenant_id") @db.Uuid
-  id             String           @default(uuid()) @db.Uuid
-  invoiceId      String           @map("invoice_id") @db.Uuid
-  invoice        Invoice          @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
+  tenantId       String                @map("tenant_id") @db.Uuid
+  id             String                @default(uuid()) @db.Uuid
+  invoiceId      String                @map("invoice_id") @db.Uuid
+  invoice        Invoice               @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
   source         SettlementSource
-  receiptDate    DateTime         @map("receipt_date") @db.Date
-  amountKobo     BigInt           @map("amount_kobo")
+  receiptDate    DateTime              @map("receipt_date") @db.Date
+  amountKobo     BigInt                @map("amount_kobo")
   reference      String?
-  version        Int              @default(1)
-  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  reversedAt     DateTime?        @map("reversed_at") @db.Timestamptz(3)
-  reversedBy     String?          @map("reversed_by") @db.Uuid
-  reversalId     String?          @map("reversal_id") @db.Uuid
-  reversalReason String?          @map("reversal_reason")
+  version        Int                   @default(1)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  reversedAt     DateTime?             @map("reversed_at") @db.Timestamptz(3)
+  reversedBy     String?               @map("reversed_by") @db.Uuid
+  reversalId     String?               @map("reversal_id") @db.Uuid
+  reversalReason String?               @map("reversal_reason")
+  matches        ReconciliationMatch[]
 
   @@id([tenantId, id])
   @@unique([tenantId, reversalId])
@@ -372,21 +374,24 @@ model ImportRow {
 }
 
 model StatementEntry {
-  tenantId    String      @map("tenant_id") @db.Uuid
-  id          String      @default(uuid()) @db.Uuid
-  accountId   String      @map("account_id") @db.Uuid
-  account     BankAccount @relation(fields: [tenantId, accountId], references: [tenantId, id])
-  batchId     String      @map("batch_id") @db.Uuid
-  batch       ImportBatch @relation(fields: [tenantId, batchId], references: [tenantId, id])
-  importRowId String      @map("import_row_id") @db.Uuid
-  importRow   ImportRow   @relation(fields: [tenantId, importRowId], references: [tenantId, id])
-  bookingDate DateTime    @map("booking_date") @db.Date
+  tenantId    String                @map("tenant_id") @db.Uuid
+  id          String                @default(uuid()) @db.Uuid
+  accountId   String                @map("account_id") @db.Uuid
+  account     BankAccount           @relation(fields: [tenantId, accountId], references: [tenantId, id])
+  batchId     String                @map("batch_id") @db.Uuid
+  batch       ImportBatch           @relation(fields: [tenantId, batchId], references: [tenantId, id])
+  importRowId String                @map("import_row_id") @db.Uuid
+  importRow   ImportRow             @relation(fields: [tenantId, importRowId], references: [tenantId, id])
+  bookingDate DateTime              @map("booking_date") @db.Date
   description String
   reference   String?
-  sourceId    String?     @map("source_id")
-  amountKobo  BigInt      @map("amount_kobo")
+  sourceId    String?               @map("source_id")
+  amountKobo  BigInt                @map("amount_kobo")
   fingerprint String
-  contentHash String      @map("content_hash")
+  contentHash String                @map("content_hash")
+  matches     ReconciliationMatch[]
+
+  allocations LineAllocation[]
 
   @@id([tenantId, id])
   @@unique([tenantId, importRowId])
@@ -425,4 +430,41 @@ model JobRun {
   updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("job_runs")
+}
+
+model ReconciliationMatch {
+  tenantId       String           @map("tenant_id") @db.Uuid
+  id             String           @default(uuid()) @db.Uuid
+  entryId        String           @map("entry_id") @db.Uuid
+  entry          StatementEntry   @relation(fields: [tenantId, entryId], references: [tenantId, id])
+  expenseId      String?          @map("expense_id") @db.Uuid
+  expense        Expense?         @relation(fields: [tenantId, expenseId], references: [tenantId, id])
+  settlementId   String?          @map("settlement_id") @db.Uuid
+  settlement     Settlement?      @relation(fields: [tenantId, settlementId], references: [tenantId, id])
+  actorId        String           @map("actor_id") @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  version        Int              @default(1)
+  reversedAt     DateTime?        @map("reversed_at") @db.Timestamptz(3)
+  reversedBy     String?          @map("reversed_by") @db.Uuid
+  reversalReason String?          @map("reversal_reason")
+  allocations    LineAllocation[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, id, entryId])
+  @@index([tenantId, entryId, createdAt, id])
+  @@map("reconciliation_matches")
+}
+
+model LineAllocation {
+  tenantId   String              @map("tenant_id") @db.Uuid
+  id         String              @default(uuid()) @db.Uuid
+  entryId    String              @map("entry_id") @db.Uuid
+  entry      StatementEntry      @relation(fields: [tenantId, entryId], references: [tenantId, id])
+  matchId    String              @map("match_id") @db.Uuid
+  match      ReconciliationMatch @relation(fields: [tenantId, matchId, entryId], references: [tenantId, id, entryId])
+  releasedAt DateTime?           @map("released_at") @db.Timestamptz(3)
+
+  @@id([tenantId, id])
+  @@index([tenantId, entryId, releasedAt])
+  @@map("line_allocations")
 }

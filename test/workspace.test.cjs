@@ -414,7 +414,7 @@ test('statement accounts store masked identifiers and enforce workspace-scoped v
   assert.equal((await listed.json()).items[0].label, 'Operating account');
 });
 
-test('statement publication resolves ambiguous rows, replays exact files and revalidates stale previews', async () => {
+test('statement publication resolves ambiguous rows, replays exact files and revalidates stale previews', async (t) => {
   const storage = new ObjectStorage();
   let injectedFailures = 0;
   const jobs = startJobs(importHandlers({
@@ -526,6 +526,65 @@ test('statement publication resolves ambiguous rows, replays exact files and rev
     const emptyResult = await wait(empty.id, 'COMMITTED');
     assert.equal(emptyResult.acceptedCount, 0);
     assert.equal(emptyResult.coverageEnd, coverage.coverageEnd);
+    await t.test('confirmed matches preserve manual receipt value and serialize competing confirmations', async () => {
+      const get = (path) => request(path, { cookie: owner.cookie }).then((response) => response.json());
+      const customer = await (await command(`${root}/customers`, { displayName: 'Reconciliation customer' })).json();
+      const invoice = await (await command(`${root}/invoices`, {
+        customerId: customer.id, issueDate: '2026-10-01', dueDate: '2026-10-31',
+        lines: [{ description: 'Fixture invoice', quantity: 1, unitKobo: '8500001' }],
+      })).json();
+      const invoicePath = `${root}/invoices/${invoice.id}`;
+      assert.equal((await command(`${invoicePath}/issue`, { version: 1 })).status, 200);
+      const receipt = await (await command(`${invoicePath}/settlements`, {
+        version: 2, amountKobo: '3500001', receiptDate: '2026-10-02', reference: 'ref-a',
+      })).json();
+      const expense = await (await command(`${root}/expenses`, {
+        payee: 'Supplies', date: '2026-10-08', category: 'SUPPLIES', amountKobo: '2500000', reference: 'Ref-B',
+      })).json();
+      const { items } = await get(`${root}/statement-entries`);
+      const credit = items.find((row) => row.amountKobo === '3500001');
+      const remainder = items.find((row) => row.amountKobo === '5000000');
+      const debit = items.find((row) => row.amountKobo === '-2500000');
+      assert.ok(credit && remainder && debit);
+      const suggest = (row) => get(`${root}/statement-entries/${row.id}/candidates`);
+      const match = (entry, kind, target, version) => command(`${root}/matches`, {
+        entryId: entry.id, targetKind: kind, targetId: target.id, targetVersion: version,
+      });
+      const [receiptCandidate] = await suggest(credit);
+      assert.equal(receiptCandidate.id, receipt.id);
+      assert.equal(receiptCandidate.signal, 'REFERENCE');
+      assert.equal(receiptCandidate.resultingBalanceKobo, '5000000');
+      const competing = await Promise.all([match(credit, 'SETTLEMENT', receipt, 1), match(credit, 'SETTLEMENT', receipt, 1)]);
+      assert.deepEqual(competing.map((response) => response.status).sort(), [201, 409]);
+      const receiptMatch = await competing.find((response) => response.status === 201).json();
+      assert.equal((await get(invoicePath)).outstandingKobo, '5000000');
+      assert.equal((await command(`${root}/settlements/${receipt.id}/reverse`, { version: 1, reason: 'Test' })).status, 409);
+
+      const [invoiceCandidate] = await suggest(remainder);
+      assert.equal(invoiceCandidate.kind, 'INVOICE');
+      assert.equal(invoiceCandidate.resultingBalanceKobo, '0');
+      const paid = await match(remainder, 'INVOICE', invoice, 3);
+      assert.equal(paid.status, 201, await paid.clone().text());
+      assert.equal((await get(invoicePath)).outstandingKobo, '0');
+
+      const [expenseCandidate] = await suggest(debit);
+      assert.equal(expenseCandidate.signal, 'REFERENCE');
+      const matched = await match(debit, 'EXPENSE', expense, 1);
+      assert.equal(matched.status, 201, await matched.clone().text());
+      const expenseMatch = await matched.json();
+      assert.equal((await command(`${root}/expenses/${expense.id}`, { version: 1, payee: 'Changed' }, 'PATCH')).status, 409);
+      assert.equal((await command(`${root}/expenses/${expense.id}/void`, { version: 1, reason: 'Test' })).status, 409);
+
+      const reverse = (id) => command(`${root}/matches/${id}/reverse`, { version: 1, reason: 'Corrected match' });
+      assert.equal((await reverse((await paid.json()).id)).status, 200);
+      assert.equal((await get(invoicePath)).outstandingKobo, '5000000');
+      assert.equal((await reverse(receiptMatch.id)).status, 200);
+      assert.equal((await get(invoicePath)).outstandingKobo, '5000000');
+      const history = await get(`${invoicePath}/settlements`);
+      assert.equal(history.items.find((row) => row.id === receipt.id).verified, false);
+      assert.equal((await reverse(expenseMatch.id)).status, 200);
+      assert.equal((await get(`${root}/statement-entries/${debit.id}`)).status, 'UNMATCHED');
+    });
   } finally {
     await jobs.stop();
     storage.onModuleDestroy();
