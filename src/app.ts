@@ -23,6 +23,8 @@ export async function createApp(quiet = false) {
     response.setHeader('X-Request-Id', randomUUID());
     response.setHeader('Cache-Control', 'private, no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Referrer-Policy', 'no-referrer');
+    response.setHeader('X-Frame-Options', 'DENY');
     if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method) && request.get("origin") !== WEB_ORIGIN) {
       next(new Problem(403, "ORIGIN_FORBIDDEN", "Request origin is not authorised"));
       return;

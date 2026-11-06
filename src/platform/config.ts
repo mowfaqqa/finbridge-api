@@ -30,8 +30,10 @@ export function readConfig() {
   }
   const data = config.data;
   const origin = new URL(data.WEB_ORIGIN);
-  if (data.NODE_ENV === 'production' && origin.protocol !== 'https:') {
-    throw new Error('WEB_ORIGIN must use HTTPS in production');
+  if (data.NODE_ENV === 'production') {
+    if (origin.protocol !== 'https:') throw new Error('WEB_ORIGIN must use HTTPS in production');
+    if (!data.REDIS_URL.startsWith('rediss://')) throw new Error('REDIS_URL must use TLS in production');
+    if (data.S3_ENDPOINT && !data.S3_ENDPOINT.startsWith('https://')) throw new Error('S3_ENDPOINT must use HTTPS in production');
   }
   const oidcFields = [data.OIDC_ISSUER, data.OIDC_CLIENT_ID, data.OIDC_CLIENT_SECRET, data.OIDC_FLOW_SECRET];
   if (oidcFields.some(Boolean) && !oidcFields.every(Boolean)) throw new Error('Set all four OIDC configuration values');
