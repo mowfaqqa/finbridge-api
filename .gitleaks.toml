@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fixed loopback-only fixtures"
+regexTarget = "secret"
+regexes = [
+  '''^finbridge_local_(bootstrap|migrate|app|worker|invitation_secret_do_not_deploy|upload_ticket_secret_do_not_deploy)$''',
+  '''^finbridge_ci_(invitation|upload_ticket)_secret_test_only$''',
+  '''^test-only-long-and-random-oidc-flow-signing-secret$''',
+  '''^finbridge-test-client$''',
+]

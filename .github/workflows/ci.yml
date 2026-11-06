@@ -24,7 +24,15 @@ jobs:
           --health-interval 3s
           --health-timeout 3s
           --health-retries 15
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 56379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 3s --health-retries 15
     env:
+      REDIS_URL: redis://127.0.0.1:56379
+      WORKER_DATABASE_URL: postgresql://finbridge_worker:finbridge_local_worker@127.0.0.1:55432/finbridge?schema=public
+      UPLOAD_TICKET_SECRET: finbridge_ci_upload_ticket_secret_test_only
       NODE_ENV: test
       LOCAL_AUTH_ENABLED: "true"
       INVITATION_SECRET: finbridge_ci_invitation_secret_test_only
@@ -38,9 +46,19 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod --audit-level high
       - run: psql -h 127.0.0.1 -p 55432 -U postgres -d finbridge -v ON_ERROR_STOP=1 -f infra/local-postgres.sql
         env:
           PGPASSWORD: finbridge_local_bootstrap
       - run: pnpm db:deploy
       - run: pnpm build
       - run: pnpm test:integration
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan Git history
+        run: docker run --rm -u "$(id -u):$(id -g)" -v "${{ github.workspace }}:/repo" -w /repo ghcr.io/gitleaks/gitleaks:v8.24.2 git --redact .

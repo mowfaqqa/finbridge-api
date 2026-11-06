@@ -22,7 +22,7 @@ const patchBody = createBody.partial().extend({ version }).refine(({ version: _v
   Object.keys(changes).length > 0, { message: 'Provide an expense field to update' });
 const voidBody = z.object({ version, reason: z.string().trim().min(1).max(250) }).strict();
 const expenseView = z.object({
-  ...fields, id: uuid, version, status, currency: z.literal('NGN'), voidReason: z.string().nullable(),
+  ...fields, id: uuid, version, status, currency: z.literal('NGN'), voidReason: z.string().nullable(), matched: z.boolean(),
 });
 const expenseQuery = listQuery.extend({
   category: category.optional(), status: status.optional(), sort: z.enum(['asc', 'desc']).default('desc'),
@@ -30,10 +30,11 @@ const expenseQuery = listQuery.extend({
 
 const notFound = () => new Problem(404, 'EXPENSE_NOT_FOUND', 'Expense unavailable');
 const ApiKey = () => ApiHeader({ name: 'Idempotency-Key', required: true });
-const view = (row: Expense) => ({
+const activeMatches = { where: { reversedAt: null }, select: { id: true } } as const;
+const view = (row: Expense & { matches?: { id: string }[] }) => ({
   id: row.id, payee: row.payee, category: row.category, date: fromDateOnly(row.expenseDate),
   reference: row.reference, amountKobo: row.amountKobo.toString(), currency: 'NGN' as const,
-  status: row.status, voidReason: row.voidReason, version: row.version,
+  matched: !!row.matches?.length, status: row.status, voidReason: row.voidReason, version: row.version,
 });
 
 async function lockExpense(tx: Tx, tenantId: string, id: string, version: number) {
@@ -41,6 +42,9 @@ async function lockExpense(tx: Tx, tenantId: string, id: string, version: number
     SELECT status::text, version FROM expenses WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid FOR UPDATE`;
   if (!row) throw notFound();
   if (row.version !== version) throw new Problem(409, 'VERSION_CONFLICT', 'Refresh the expense before making changes');
+  if (await tx.reconciliationMatch.findFirst({ where: { tenantId, expenseId: id, reversedAt: null }, select: { id: true } })) {
+    throw new Problem(409, 'EXPENSE_MATCHED', 'Reverse the active statement match before changing this expense');
+  }
   if (row.status !== 'ACTIVE') throw new Problem(409, 'EXPENSE_VOID', 'A void expense cannot be changed');
 }
 
@@ -69,7 +73,7 @@ export class ExpensesController {
           { reference: { contains: query.q, mode: 'insensitive' } },
         ] }) },
         ...(cursor && { cursor: { tenantId_id: { tenantId, id: cursor } }, skip: 1 }),
-        orderBy: [{ expenseDate: direction }, { id: direction }], take: query.limit + 1,
+        orderBy: [{ expenseDate: direction }, { id: direction }], take: query.limit + 1, include: { matches: activeMatches },
       });
       return pageResult(rows.map(view), query);
     });
@@ -81,7 +85,7 @@ export class ExpensesController {
     const tenantId = resourceId(wid);
     const id = resourceId(eid);
     return this.workspaces.run(actor, tenantId, undefined, async (tx) => {
-      const row = await tx.expense.findUnique({ where: { tenantId_id: { tenantId, id } } });
+      const row = await tx.expense.findUnique({ where: { tenantId_id: { tenantId, id } }, include: { matches: activeMatches } });
       if (!row) throw notFound();
       return view(row);
     });

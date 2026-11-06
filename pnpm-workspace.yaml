@@ -3,3 +3,6 @@ onlyBuiltDependencies:
   - '@prisma/client'
   - '@prisma/engines'
   - prisma
+overrides:
+  '@nestjs/platform-express>multer': '^2.5.0'
+  '@prisma/config>deepmerge-ts': '^8.0.0'
