@@ -25,7 +25,8 @@
     "express": "^5.1.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "zod": "^4.1.0"
+    "zod": "^4.1.0",
+    "openid-client": "^6.8.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

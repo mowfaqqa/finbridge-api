@@ -22,3 +22,7 @@ The local identity picker is enabled by `LOCAL_AUTH_ENABLED=true` and is unavail
 With a dedicated local or CI database, run `pnpm build && pnpm test:integration`. The tests create synthetic workspaces to verify idempotency, session rotation, tenant isolation and OpenAPI. Export the contract without starting the server with `pnpm --silent api:export` after building.
 
 For local membership testing, invite `operator@finbridge.test` or `viewer@finbridge.test` as the owner. Open the invitation link in a separate browser session and choose its matching local identity. Creating a replacement link invalidates the previous pending link. The link is presented in the UI for the owner to share.
+
+## Managed OIDC configuration
+
+Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and a random `OIDC_FLOW_SECRET` of at least 32 characters to enable managed sign-in. Register `{WEB_ORIGIN}/api/v1/auth/oidc/callback` as an allowed callback on the provider, with the authorization code flow, PKCE S256 and client secret basic authentication. Use an HTTPS issuer and set an HTTPS web origin for production. The provider must return the verified email claim for identity-bound invitations. The local synthetic path works with the four OIDC values unset.

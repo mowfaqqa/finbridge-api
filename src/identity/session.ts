@@ -24,7 +24,7 @@ function cookieToken(request: Request) {
 
 @Injectable()
 export class Sessions {
-  private readonly secure = readConfig().NODE_ENV === 'production';
+  private readonly secure = readConfig().WEB_ORIGIN.startsWith('https://');
   private readonly cookieOptions = {
     httpOnly: true, secure: this.secure, sameSite: 'lax' as const, path: '/',
   };

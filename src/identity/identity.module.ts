@@ -10,6 +10,7 @@ import { Problem } from '../platform/problem';
 import { mutationKey } from '../platform/transaction';
 import { Actor, SessionGuard, Sessions, type ActorIdentity } from './session';
 import { Workspaces } from './workspaces';
+import { OidcController, OidcSignIn } from './oidc';
 import { Memberships } from './memberships';
 import { InvitationController, MembershipController } from './membership.controller';
 
@@ -25,14 +26,17 @@ class SessionController {
   private readonly config = readConfig();
   private localWindow = { until: 0, count: 0 };
 
-  constructor(private readonly sessions: Sessions, private readonly memberships: Memberships) {}
+  constructor(
+    private readonly sessions: Sessions, private readonly memberships: Memberships, private readonly oidc: OidcSignIn,
+  ) {}
 
   @Get('options')
-  @ApiOutput(200, z.object({ localSignIn: z.boolean(), invitationsEnabled: z.boolean() }))
+  @ApiOutput(200, z.object({ localSignIn: z.boolean(), invitationsEnabled: z.boolean(), managedSignIn: z.boolean() }))
   options() {
     return {
       localSignIn: this.config.NODE_ENV !== 'production' && this.config.LOCAL_AUTH_ENABLED,
       invitationsEnabled: this.memberships.invitationsEnabled,
+      managedSignIn: this.oidc.enabled,
     };
   }
 
@@ -96,8 +100,8 @@ class WorkspacesController {
 }
 
 @Module({
-  providers: [Sessions, SessionGuard, Workspaces, Memberships],
+  providers: [Sessions, SessionGuard, Workspaces, Memberships, OidcSignIn],
   exports: [Sessions, SessionGuard, Workspaces],
-  controllers: [SessionController, WorkspacesController, MembershipController, InvitationController],
+  controllers: [SessionController, WorkspacesController, MembershipController, InvitationController, OidcController],
 })
 export class IdentityModule {}
