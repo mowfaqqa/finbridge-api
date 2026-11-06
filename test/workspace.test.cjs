@@ -226,3 +226,65 @@ test('customers support stable cursor navigation, versioned writes and viewer re
   assert.equal(fresh.version, 2);
   assert.ok(fresh.email.endsWith('@example.test'));
 });
+
+test('invoice issue preserves exact totals, snapshots, monotonic numbers and idempotency under concurrency', async () => {
+  const owner = await signIn('owner');
+  const workspace = await createWorkspace(owner.cookie, 'Invoice lifecycle test');
+  const root = `/workspaces/${workspace.id}`;
+  const command = (path, body, method = 'POST', key = randomUUID()) =>
+    request(path, { cookie: owner.cookie, method, key, body });
+  const customerResponse = await command(`${root}/customers`, { displayName: 'Original customer', email: 'billing@example.test' });
+  assert.equal(customerResponse.status, 201);
+  const customer = await customerResponse.json();
+  const body = {
+    customerId: customer.id, issueDate: '2025-02-01', dueDate: '2025-02-15',
+    lines: [{ description: 'Work', quantity: 2, unitKobo: '4250001' }],
+  };
+  const invoices = `${root}/invoices`;
+  assert.equal((await command(invoices, { ...body, dueDate: '2025-01-31' })).status, 422);
+  assert.equal((await command(invoices, { ...body, lines: [{ description: 'Bound', quantity: 2, unitKobo: '1000000000000' }] })).status, 422);
+  assert.equal((await command(invoices, { ...body, lines: [{ description: 'Fraction', quantity: 1, unitKobo: '10.1' }] })).status, 422);
+  const draft = await (await command(invoices, body)).json();
+  assert.equal(draft.status, 'DRAFT');
+  assert.equal(draft.outstandingKobo, null);
+  assert.equal(draft.totalKobo, '8500002');
+  assert.equal(draft.currency, 'NGN');
+
+  const issue = (id, key) => command(`${invoices}/${id}/issue`, { version: 1 }, 'POST', key);
+  const key = randomUUID();
+  const results = await Promise.all([issue(draft.id, key), issue(draft.id, key)]);
+  for (const response of results) assert.equal(response.status, 200, await response.clone().text());
+  const [issued, replay] = await Promise.all(results.map((response) => response.json()));
+  assert.deepEqual(replay, issued);
+  assert.equal(issued.number, 'INV-001');
+  assert.equal(issued.overdue, true);
+  assert.equal(issued.outstandingKobo, '8500002');
+
+  const rename = await command(`${root}/customers/${customer.id}`, { version: 1, displayName: 'Renamed customer' }, 'PATCH');
+  assert.equal(rename.status, 200);
+  const snapshot = await (await request(`${invoices}/${draft.id}`, { cookie: owner.cookie })).json();
+  assert.equal(snapshot.customer.displayName, 'Original customer');
+  assert.equal((await command(`${invoices}/${draft.id}`, { ...body, version: 2 }, 'PATCH')).status, 409);
+
+  const nextDrafts = await Promise.all([command(invoices, body), command(invoices, body)]);
+  const [two, three] = await Promise.all(nextDrafts.map((response) => response.json()));
+  const nextNumbers = await Promise.all([issue(two.id), issue(three.id)]);
+  assert.deepEqual((await Promise.all(nextNumbers.map((response) => response.json()))).map((row) => row.number).sort(), ['INV-002', 'INV-003']);
+
+  const db = new PrismaClient();
+  try {
+    await assert.rejects(() => db.$transaction(async (tx) => {
+      await setContext(tx, owner.actor.id, workspace.id);
+      await tx.invoiceLine.updateMany({ where: { invoiceId: issued.id }, data: { description: 'Tampered' } });
+    }));
+  } finally {
+    await db.$disconnect();
+  }
+  assert.equal((await command(`${invoices}/${issued.id}/void`, { version: 2, reason: '' })).status, 422);
+  const voided = await command(`${invoices}/${issued.id}/void`, { version: 2, reason: 'Duplicate draft' });
+  assert.equal(voided.status, 200, await voided.clone().text());
+  const voidView = await voided.json();
+  assert.equal(voidView.status, 'VOID');
+  assert.equal(voidView.number, 'INV-001');
+  assert.equal(voidView.outstandingKobo, null);
+});

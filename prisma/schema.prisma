@@ -63,6 +63,9 @@ model Workspace {
   idempotency IdempotencyRecord[]
   customers   Customer[]
 
+  invoices       Invoice[]
+  invoiceCounter InvoiceCounter?
+
   @@map("workspaces")
 }
 
@@ -137,7 +140,64 @@ model Customer {
   version     Int       @default(1)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
+  invoices Invoice[]
+
   @@id([tenantId, id])
   @@index([tenantId, displayName, id])
   @@map("customers")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  VOID
+
+  @@map("invoice_status")
+}
+
+model Invoice {
+  tenantId         String        @map("tenant_id") @db.Uuid
+  id               String        @default(uuid()) @db.Uuid
+  workspace        Workspace     @relation(fields: [tenantId], references: [id])
+  customerId       String        @map("customer_id") @db.Uuid
+  customer         Customer      @relation(fields: [tenantId, customerId], references: [tenantId, id])
+  customerSnapshot Json?         @map("customer_snapshot")
+  issueDate        DateTime      @map("issue_date") @db.Date
+  dueDate          DateTime      @map("due_date") @db.Date
+  status           InvoiceStatus @default(DRAFT)
+  totalKobo        BigInt        @map("total_kobo")
+  issuedNumber     BigInt?       @map("issued_number")
+  issuedAt         DateTime?     @map("issued_at") @db.Timestamptz(3)
+  voidReason       String?       @map("void_reason")
+  voidedAt         DateTime?     @map("voided_at") @db.Timestamptz(3)
+  version          Int           @default(1)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  lines            InvoiceLine[]
+
+  @@id([tenantId, id])
+  @@unique([tenantId, issuedNumber])
+  @@index([tenantId, status, dueDate, id])
+  @@index([tenantId, issueDate, id])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  tenantId    String  @map("tenant_id") @db.Uuid
+  invoiceId   String  @map("invoice_id") @db.Uuid
+  invoice     Invoice @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
+  position    Int
+  description String
+  quantity    Int
+  unitKobo    BigInt  @map("unit_kobo")
+
+  @@id([tenantId, invoiceId, position])
+  @@map("invoice_lines")
+}
+
+model InvoiceCounter {
+  tenantId   String    @id @map("tenant_id") @db.Uuid
+  workspace  Workspace @relation(fields: [tenantId], references: [id])
+  lastNumber BigInt    @map("last_number")
+
+  @@map("invoice_counters")
 }
