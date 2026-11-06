@@ -46,9 +46,19 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod --audit-level high
       - run: psql -h 127.0.0.1 -p 55432 -U postgres -d finbridge -v ON_ERROR_STOP=1 -f infra/local-postgres.sql
         env:
           PGPASSWORD: finbridge_local_bootstrap
       - run: pnpm db:deploy
       - run: pnpm build
       - run: pnpm test:integration
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan Git history
+        run: docker run --rm -u "$(id -u):$(id -g)" -v "${{ github.workspace }}:/repo" -w /repo ghcr.io/gitleaks/gitleaks:v8.24.2 git --redact .

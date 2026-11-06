@@ -77,6 +77,7 @@ export function startJobs(handlers: Record<string, Handler>) {
   const worker = new Worker<JobPayload, void, 'run'>('finbridge-jobs', async (job) => {
     const event = await database.outboxEvent.findUnique({ where: { id: job.data.eventId } });
     if (!event || event.completedAt) return;
+    const startedAt = Date.now();
     const leaseToken = randomUUID();
     const run = await database.$transaction(async (tx) => {
       await setContext(tx, event.actorId, event.tenantId);
@@ -114,7 +115,10 @@ export function startJobs(handlers: Record<string, Handler>) {
       if (run.attempts > maxAttempts) throw new TerminalJobError('JOB_RETRIES_EXHAUSTED');
       const prepared = await handler.prepare?.(event, database);
       await finalize(undefined, prepared);
-      logWorker('job_completed', { job: event.kind, requestId: event.requestId, attempts: run.attempts });
+      logWorker('job_completed', {
+        job: event.kind, requestId: event.requestId, attempts: run.attempts,
+        queueMs: Math.max(0, startedAt - event.createdAt.getTime()), durationMs: Date.now() - startedAt,
+      });
     } catch (error) {
       await finalize(error);
       const safeCode = error instanceof TerminalJobError || error instanceof Problem ? error.code : 'JOB_TRANSIENT_ERROR';
@@ -126,6 +130,15 @@ export function startJobs(handlers: Record<string, Handler>) {
   const logQueueError = (error: Error) => logWorker('queue_error', { error: error.name });
   queue.on('error', logQueueError);
   worker.on('error', logQueueError);
+  const queueAge = setInterval(() => {
+    void database.outboxEvent.findFirst({
+      where: { completedAt: null }, orderBy: { createdAt: 'asc' }, select: { createdAt: true },
+    }).then((oldest) => {
+      const ageMs = oldest ? Date.now() - oldest.createdAt.getTime() : 0;
+      logWorker(ageMs > 300_000 ? 'queue_age_alert' : 'queue_age', { ageMs });
+    }).catch(() => logWorker('queue_age_unavailable'));
+  }, 60_000);
+  queueAge.unref();
   let timer: NodeJS.Timeout | undefined;
   void queue.waitUntilReady().then(() => relay()).catch(() => {
     if (!stopped) timer = setTimeout(() => { void relay(); }, 1_000);
@@ -135,6 +148,7 @@ export function startJobs(handlers: Record<string, Handler>) {
     async stop() {
       stopped = true;
       clearTimeout(timer);
+      clearInterval(queueAge);
       await worker.close();
       await queue.close();
       await database.$disconnect();

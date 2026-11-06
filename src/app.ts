@@ -18,9 +18,22 @@ export class AppModule {}
 export async function createApp(quiet = false) {
   const app = await NestFactory.create(AppModule, quiet ? { logger: false } : {});
   app.setGlobalPrefix('api/v1');
-  const { WEB_ORIGIN } = readConfig();
+  const { WEB_ORIGIN, REQUEST_LOG_ENABLED } = readConfig();
   app.use((request: Request, response: Response, next: NextFunction) => {
-    response.setHeader('X-Request-Id', randomUUID());
+    const incoming = request.get('x-request-id');
+    const requestId = incoming && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(incoming)
+      ? incoming : randomUUID();
+    response.setHeader('X-Request-Id', requestId);
+    if (REQUEST_LOG_ENABLED) {
+      const start = performance.now();
+      response.once('finish', () => {
+        const route = typeof request.route?.path === 'string' ? request.route.path : 'unmapped';
+        process.stdout.write(JSON.stringify({
+          event: 'api_request', requestId, time: new Date().toISOString(), method: request.method,
+          route, status: response.statusCode, durationMs: Math.round(performance.now() - start),
+        }) + '\n');
+      });
+    }
     response.setHeader('Cache-Control', 'private, no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');

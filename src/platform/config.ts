@@ -7,6 +7,7 @@ const env = z.object({
   WEB_ORIGIN: z.url({ protocol: /^https?$/ }).default('http://localhost:3000'),
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
   WORKER_DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }).optional(),
+  REQUEST_LOG_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
   REDIS_URL: z.url({ protocol: /^rediss?$/ }).default('redis://127.0.0.1:56379'),
   S3_ENDPOINT: z.url({ protocol: /^https?$/ }).optional(),
   S3_BUCKET: z.string().min(1).default('finbridge-local'),

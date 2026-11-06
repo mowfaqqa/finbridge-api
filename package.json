@@ -17,7 +17,10 @@
     "test:integration": "node --env-file-if-exists=.env --test test/*.test.cjs",
     "worker:dev": "node --env-file-if-exists=.env --watch -r ts-node/register src/worker.ts",
     "worker:start": "node --env-file-if-exists=.env dist/worker.js",
-    "storage:dev": "node --env-file-if-exists=.env infra/local-storage.cjs"
+    "storage:dev": "node --env-file-if-exists=.env infra/local-storage.cjs",
+    "demo:seed": "node --env-file-if-exists=.env infra/seed-demo.cjs",
+    "test:load": "node --env-file-if-exists=.env infra/load.cjs",
+    "test:async": "node --env-file-if-exists=.env infra/load-async.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",

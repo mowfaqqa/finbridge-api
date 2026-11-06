@@ -38,3 +38,9 @@ For integration tests, keep PostgreSQL and Redis running. The tests start an iso
 ## Readiness evidence
 
 Open **Readiness** as an owner or finance operator. Generation captures the current three-month evidence in one database snapshot and queues PDF rendering. The worker embeds IBM Plex Sans from `assets/fonts` under the included OFL license. Keep that directory with the deployed worker. Downloads are authorised per request and expire after 24 hours.
+
+## Local M3 demo
+
+With the API, worker, Redis and object storage running, run `pnpm build && pnpm demo:seed`. Open the printed overview and readiness links in the web app. The seed uses the last three completed Lagos months and creates a new synthetic workspace on each run.
+
+See [the architecture and threat model](docs/architecture.md) and [the local runbook](docs/runbook.md) for service boundaries, verification and recovery.
