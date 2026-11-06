@@ -176,6 +176,9 @@ model Invoice {
   createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   lines            InvoiceLine[]
 
+  settledKobo BigInt       @default(0) @map("settled_kobo")
+  settlements Settlement[]
+
   @@id([tenantId, id])
   @@unique([tenantId, issuedNumber])
   @@index([tenantId, status, dueDate, id])
@@ -240,4 +243,33 @@ model Expense {
   @@id([tenantId, id])
   @@index([tenantId, expenseDate, id])
   @@map("expenses")
+}
+
+enum SettlementSource {
+  MANUAL
+  STATEMENT
+
+  @@map("settlement_source")
+}
+
+model Settlement {
+  tenantId       String           @map("tenant_id") @db.Uuid
+  id             String           @default(uuid()) @db.Uuid
+  invoiceId      String           @map("invoice_id") @db.Uuid
+  invoice        Invoice          @relation(fields: [tenantId, invoiceId], references: [tenantId, id])
+  source         SettlementSource
+  receiptDate    DateTime         @map("receipt_date") @db.Date
+  amountKobo     BigInt           @map("amount_kobo")
+  reference      String?
+  version        Int              @default(1)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  reversedAt     DateTime?        @map("reversed_at") @db.Timestamptz(3)
+  reversedBy     String?          @map("reversed_by") @db.Uuid
+  reversalId     String?          @map("reversal_id") @db.Uuid
+  reversalReason String?          @map("reversal_reason")
+
+  @@id([tenantId, id])
+  @@unique([tenantId, reversalId])
+  @@index([tenantId, invoiceId, receiptDate, id])
+  @@map("settlements")
 }

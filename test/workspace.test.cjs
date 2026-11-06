@@ -314,3 +314,57 @@ test('expenses use positive exact kobo and versioned, reasoned voids', async () 
   assert.equal((await voided.json()).status, 'VOID');
   assert.equal((await command(id, { version: 3, amountKobo: '2500000' }, 'PATCH')).status, 409);
 });
+
+test('manual settlement replay, concurrent receipts and reversal preserve outstanding balances', async () => {
+  const owner = await signIn('owner');
+  const workspace = await createWorkspace(owner.cookie, 'Settlements test');
+  const root = `/workspaces/${workspace.id}`;
+  const command = (path, body, key = randomUUID()) => request(path, { cookie: owner.cookie, key, body });
+  const customer = await (await command(`${root}/customers`, { displayName: 'Lagos trading partner' })).json();
+  const draft = await (await command(`${root}/invoices`, {
+    customerId: customer.id, issueDate: '2026-10-01', dueDate: '2026-10-31',
+    lines: [{ description: 'Service', quantity: 1, unitKobo: '8500000' }],
+  })).json();
+  const path = `${root}/invoices/${draft.id}`;
+  assert.equal((await command(`${path}/issue`, { version: 1 })).status, 200);
+  const receipt = (amountKobo, version, key) => command(`${path}/settlements`, {
+    amountKobo, version, receiptDate: '2026-10-15', reference: 'RECEIPT-01',
+  }, key);
+  const detail = () => request(path, { cookie: owner.cookie }).then((response) => response.json());
+
+  const key = randomUUID();
+  const [first, replay] = await Promise.all([receipt('3500000', 2, key), receipt('3500000', 2, key)]);
+  assert.equal(first.status, 201, await first.clone().text());
+  assert.equal(replay.status, 201, await replay.clone().text());
+  const recorded = await first.json();
+  assert.equal((await replay.json()).id, recorded.id);
+  const part = await detail();
+  assert.equal(part.outstandingKobo, '5000000');
+  assert.equal(part.status, 'PART_PAID');
+  assert.equal(part.version, 3);
+  const filtered = await request(`${root}/invoices?status=PART_PAID`, { cookie: owner.cookie });
+  assert.equal(filtered.status, 200);
+  assert.equal((await filtered.json()).items.length, 1);
+  assert.equal((await receipt('5000001', 3)).status, 422);
+  assert.equal((await command(`${path}/void`, { version: 3, reason: 'Invalid void' })).status, 409);
+
+  const race = await Promise.all([receipt('5000000', 3), receipt('5000000', 3)]);
+  assert.deepEqual(race.map((response) => response.status).sort(), [201, 409]);
+  const paid = await detail();
+  assert.equal(paid.status, 'PAID');
+  assert.equal(paid.outstandingKobo, '0');
+  assert.equal(paid.overdue, false);
+  const history = await request(`${path}/settlements`, { cookie: owner.cookie });
+  assert.equal((await history.json()).items.length, 2);
+
+  const reason = { version: 1, reason: 'Receipt was assigned incorrectly' };
+  const reverseKey = randomUUID();
+  const reverse = await command(`${root}/settlements/${recorded.id}/reverse`, reason, reverseKey);
+  assert.equal(reverse.status, 200, await reverse.clone().text());
+  assert.equal((await command(`${root}/settlements/${recorded.id}/reverse`, reason, reverseKey)).status, 200);
+  assert.equal((await command(`${root}/settlements/${recorded.id}/reverse`, reason)).status, 409);
+  const restored = await detail();
+  assert.equal(restored.status, 'PART_PAID');
+  assert.equal(restored.outstandingKobo, '3500000');
+  assert.equal(restored.version, 5);
+});

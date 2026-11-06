@@ -23,16 +23,16 @@ const updateInvoice = invoiceInput.extend({ version });
 const issueInvoice = z.object({ version }).strict();
 const voidInvoice = z.object({ version, reason: z.string().trim().min(1).max(250) }).strict();
 const party = z.object({ displayName: z.string(), email: z.email().nullable() });
-const status = z.enum(['DRAFT', 'OPEN', 'VOID']);
+const statusSchema = z.enum(['DRAFT', 'OPEN', 'PART_PAID', 'PAID', 'VOID']);
 const summarySchema = z.object({
-  id: uuid, customerId: uuid, customer: party, issueDate: dateOnly, dueDate: dateOnly, status,
-  totalKobo: kobo, outstandingKobo: kobo.nullable(), currency: z.literal('NGN'), number: z.string().nullable(),
+  id: uuid, customerId: uuid, customer: party, issueDate: dateOnly, dueDate: dateOnly, status: statusSchema,
+  totalKobo: kobo, settledKobo: kobo, outstandingKobo: kobo.nullable(), currency: z.literal('NGN'), number: z.string().nullable(),
   issuedAt: dateTime.nullable(), voidReason: z.string().nullable(), overdue: z.boolean(), version,
 });
 const invoiceSchema = summarySchema.extend({
   lines: z.array(lineInput.extend({ position: z.number().int(), totalKobo: kobo })),
 });
-const filterStatus = z.enum(['DRAFT', 'ISSUED', 'VOID']);
+const filterStatus = z.enum(['DRAFT', 'ISSUED', 'OPEN', 'PART_PAID', 'PAID', 'VOID']);
 const invoiceQuery = listQuery.extend({
   status: filterStatus.optional(), sort: z.enum(['asc', 'desc']).default('desc'),
 }).refine((input) => !(input.after && input.before), { message: 'Use either the next or previous cursor' });
@@ -63,15 +63,18 @@ function totals(body: z.output<typeof invoiceInput>) {
 }
 
 function summary(row: Prisma.InvoiceGetPayload<{ include: typeof summaryInclude }>) {
-  const status = row.status === 'ISSUED' ? 'OPEN' : row.status;
+  const outstanding = row.totalKobo - row.settledKobo;
+  let status: z.output<typeof statusSchema> = row.status === 'ISSUED' ? 'OPEN' : row.status;
+  if (row.status === 'ISSUED' && row.settledKobo > 0n) status = outstanding === 0n ? 'PAID' : 'PART_PAID';
   const dueDate = fromDateOnly(row.dueDate);
   return {
     id: row.id, customerId: row.customerId, customer: (row.customerSnapshot as z.output<typeof party> | null) ?? row.customer,
     issueDate: fromDateOnly(row.issueDate), dueDate, status, totalKobo: row.totalKobo.toString(),
-    outstandingKobo: row.status === 'ISSUED' ? row.totalKobo.toString() : null, currency: 'NGN' as const,
+    settledKobo: row.settledKobo.toString(),
+    outstandingKobo: row.status === 'ISSUED' ? outstanding.toString() : null, currency: 'NGN' as const,
     number: row.issuedNumber === null ? null : `INV-${row.issuedNumber.toString().padStart(3, '0')}`,
     issuedAt: row.issuedAt?.toISOString() ?? null, voidReason: row.voidReason,
-    overdue: row.status === 'ISSUED' && dueDate < lagosDate(), version: row.version,
+    overdue: row.status === 'ISSUED' && outstanding > 0n && dueDate < lagosDate(), version: row.version,
   };
 }
 
@@ -85,8 +88,8 @@ function detail(row: Prisma.InvoiceGetPayload<{ include: typeof detailInclude }>
 }
 
 export async function lockInvoice(tx: Tx, tenantId: string, id: string) {
-  const [row] = await tx.$queryRaw<Pick<Invoice, 'version' | 'status'>[]>`
-    SELECT version, status::text FROM invoices WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid FOR UPDATE`;
+  const [row] = await tx.$queryRaw<Pick<Invoice, 'version' | 'status' | 'totalKobo' | 'settledKobo'>[]>`
+    SELECT version, status::text, total_kobo AS "totalKobo", settled_kobo AS "settledKobo" FROM invoices WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid FOR UPDATE`;
   if (!row) throw invoiceMissing();
   return row;
 }
@@ -123,9 +126,14 @@ export class InvoicesController {
     const direction = query.before ? (query.sort === 'asc' ? 'desc' : 'asc') : query.sort;
     const number = /^(?:inv-)?0*([0-9]{1,18})$/i.exec(query.q ?? '')?.[1];
     return this.workspaces.run(actor, tenantId, undefined, async (tx) => {
+      let state: Prisma.InvoiceWhereInput = { status: query.status === 'DRAFT' || query.status === 'VOID' ? query.status : undefined };
+      if (query.status === 'ISSUED') state = { status: 'ISSUED' };
+      if (query.status === 'OPEN') state = { status: 'ISSUED', settledKobo: 0n };
+      if (query.status === 'PART_PAID') state = { status: 'ISSUED', settledKobo: { gt: 0n, lt: tx.invoice.fields.totalKobo } };
+      if (query.status === 'PAID') state = { status: 'ISSUED', settledKobo: { equals: tx.invoice.fields.totalKobo } };
       const rows = await tx.invoice.findMany({
         where: {
-          tenantId, status: query.status,
+          tenantId, ...state,
           ...(query.q && { OR: [
             { status: 'DRAFT', customer: { displayName: { contains: query.q, mode: 'insensitive' } } },
             { customerSnapshot: { path: ['displayName'], string_contains: query.q, mode: 'insensitive' } },
@@ -238,7 +246,9 @@ export class InvoicesController {
     const input = parse(voidInvoice, body);
     return this.workspaces.run(actor, tenantId, financialWriters, (tx) => idempotent(
       tx, actor.id, tenantId, 'invoice.void', mutationKey(req), { id, ...input }, async () => {
-        requireState(await lockInvoice(tx, tenantId, id), input.version, 'ISSUED');
+        const current = await lockInvoice(tx, tenantId, id);
+        requireState(current, input.version, 'ISSUED');
+        if (current.settledKobo > 0n) throw new Problem(409, 'ACTIVE_SETTLEMENTS', 'Reverse active settlements before voiding this invoice');
         const invoice = await tx.invoice.update({
           where: { tenantId_id: { tenantId, id } },
           data: { status: 'VOID', voidedAt: new Date(), voidReason: input.reason, version: { increment: 1 } },
