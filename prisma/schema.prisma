@@ -68,6 +68,8 @@ model Workspace {
 
   expenses Expense[]
 
+  bankAccounts BankAccount[]
+
   @@map("workspaces")
 }
 
@@ -272,4 +274,19 @@ model Settlement {
   @@unique([tenantId, reversalId])
   @@index([tenantId, invoiceId, receiptDate, id])
   @@map("settlements")
+}
+
+model BankAccount {
+  tenantId  String    @map("tenant_id") @db.Uuid
+  id        String    @default(uuid()) @db.Uuid
+  workspace Workspace @relation(fields: [tenantId], references: [id])
+  label     String
+  lastFour  String?   @map("last_four")
+  active    Boolean   @default(true)
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([tenantId, id])
+  @@index([tenantId, active, label, id])
+  @@map("bank_accounts")
 }

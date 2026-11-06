@@ -368,3 +368,27 @@ test('manual settlement replay, concurrent receipts and reversal preserve outsta
   assert.equal(restored.outstandingKobo, '3500000');
   assert.equal(restored.version, 5);
 });
+
+test('statement accounts store masked identifiers and enforce workspace-scoped versions', async () => {
+  const owner = await signIn('owner');
+  const other = await signIn('second-owner');
+  const workspace = await createWorkspace(owner.cookie, 'Statement accounts test');
+  const root = `/workspaces/${workspace.id}/accounts`;
+  const create = (body, key = randomUUID()) => request(root, { cookie: owner.cookie, body, key });
+  assert.equal((await create({ label: 'Operating', lastFour: '12345678' })).status, 422);
+  const key = randomUUID();
+  const response = await create({ label: 'Operating', lastFour: '0034' }, key);
+  assert.equal(response.status, 201, await response.clone().text());
+  const account = await response.json();
+  assert.equal(account.lastFour, '0034');
+  assert.equal((await (await create({ label: 'Operating', lastFour: '0034' }, key)).json()).id, account.id);
+  const path = `${root}/${account.id}`;
+  assert.equal((await request(path, { cookie: other.cookie })).status, 404);
+  const update = (version) => request(path, {
+    method: 'PATCH', cookie: owner.cookie, key: randomUUID(), body: { version, label: 'Operating account' },
+  });
+  assert.equal((await update(1)).status, 200);
+  assert.equal((await update(1)).status, 409);
+  const listed = await request(`${root}?active=true`, { cookie: owner.cookie });
+  assert.equal((await listed.json()).items[0].label, 'Operating account');
+});
