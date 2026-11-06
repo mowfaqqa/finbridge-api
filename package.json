@@ -14,7 +14,10 @@
     "prisma:generate": "prisma generate",
     "typecheck": "tsc --noEmit",
     "api:export": "node --env-file-if-exists=.env dist/export-openapi.js",
-    "test:integration": "node --env-file-if-exists=.env --test test/*.test.cjs"
+    "test:integration": "node --env-file-if-exists=.env --test test/*.test.cjs",
+    "worker:dev": "node --env-file-if-exists=.env --watch -r ts-node/register src/worker.ts",
+    "worker:start": "node --env-file-if-exists=.env dist/worker.js",
+    "storage:dev": "node --env-file-if-exists=.env infra/local-storage.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",
@@ -26,13 +29,17 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "zod": "^4.1.0",
-    "openid-client": "^6.8.0"
+    "openid-client": "^6.8.0",
+    "@aws-sdk/client-s3": "^3.1000.0",
+    "bullmq": "^5.65.0",
+    "csv-parse": "^6.1.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "prisma": "~6.19.0",
     "ts-node": "^10.9.2",
-    "typescript": "~5.9.0"
+    "typescript": "~5.9.0",
+    "s3rver": "^3.7.0"
   }
 }

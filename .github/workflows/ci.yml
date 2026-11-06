@@ -24,7 +24,15 @@ jobs:
           --health-interval 3s
           --health-timeout 3s
           --health-retries 15
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 56379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 3s --health-retries 15
     env:
+      REDIS_URL: redis://127.0.0.1:56379
+      WORKER_DATABASE_URL: postgresql://finbridge_worker:finbridge_local_worker@127.0.0.1:55432/finbridge?schema=public
+      UPLOAD_TICKET_SECRET: finbridge_ci_upload_ticket_secret_test_only
       NODE_ENV: test
       LOCAL_AUTH_ENABLED: "true"
       INVITATION_SECRET: finbridge_ci_invitation_secret_test_only

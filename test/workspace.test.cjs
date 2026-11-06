@@ -1,15 +1,34 @@
 const assert = require('node:assert/strict');
+const { mkdtemp, rm } = require('node:fs/promises');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
+const S3rver = require('s3rver');
 const { randomUUID } = require('node:crypto');
 const { test, before, after } = require('node:test');
 const { PrismaClient } = require('@prisma/client');
 const { createApp } = require('../dist/app');
+const { ObjectStorage } = require('../dist/platform/storage');
+const { startJobs } = require('../dist/jobs/runner');
+const { importHandlers } = require('../dist/statements/import-worker');
 const { setContext } = require('../dist/platform/transaction');
 
 let app;
 let base;
+let testStorage;
+let storagePath;
 const origin = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
 
 before(async () => {
+  storagePath = await mkdtemp(join(tmpdir(), 'finbridge-storage-'));
+  testStorage = new S3rver({
+    address: '127.0.0.1', port: 0, silent: true, directory: storagePath,
+    configureBuckets: [{ name: 'finbridge-test' }],
+  });
+  const address = await testStorage.run();
+  Object.assign(process.env, {
+    S3_ENDPOINT: `http://127.0.0.1:${address.port}`, S3_BUCKET: 'finbridge-test',
+    S3_ACCESS_KEY: 'S3RVER', S3_SECRET_KEY: 'S3RVER',
+  });
   app = await createApp(true);
   await app.listen(0, '127.0.0.1');
   base = await app.getUrl();
@@ -17,6 +36,8 @@ before(async () => {
 
 after(async () => {
   await app?.close();
+  await testStorage?.close();
+  if (storagePath) await rm(storagePath, { recursive: true, force: true });
 });
 
 async function request(path, { cookie, body, key, method, requestOrigin = origin } = {}) {
@@ -391,4 +412,123 @@ test('statement accounts store masked identifiers and enforce workspace-scoped v
   assert.equal((await update(1)).status, 409);
   const listed = await request(`${root}?active=true`, { cookie: owner.cookie });
   assert.equal((await listed.json()).items[0].label, 'Operating account');
+});
+
+test('statement publication resolves ambiguous rows, replays exact files and revalidates stale previews', async () => {
+  const storage = new ObjectStorage();
+  let injectedFailures = 0;
+  const jobs = startJobs(importHandlers({
+    open(key) {
+      if (injectedFailures++ === 0) throw new Error('Injected object-store interruption');
+      return storage.open(key);
+    },
+  }));
+  const db = new PrismaClient();
+  try {
+    const owner = await signIn('owner');
+    const other = await signIn('second-owner');
+    const workspace = await createWorkspace(owner.cookie, 'Statement imports test');
+    const root = `/workspaces/${workspace.id}`;
+    const command = (path, body, method = 'POST', key = randomUUID()) => request(path, { cookie: owner.cookie, body, method, key });
+    const account = await (await command(`${root}/accounts`, { label: 'Operating' })).json();
+    const header = 'date,description,amount,reference,source_id\n';
+    const identical = '2026-10-02,Receipt,35000.01,Ref-A,\n';
+    const stable = '2026-10-08,Expense,-25000,Ref-B,stable-001\n';
+    const coverage = { coverageStart: '2026-10-01', coverageEnd: '2026-10-31' };
+    const mapping = { date: 0, description: 1, dateFormat: 'ISO', money: { mode: 'signed', amount: 2 }, reference: 3, sourceId: 4 };
+
+    const uploaded = async (text) => {
+      const file = Buffer.from(text);
+      const response = await command(`${root}/imports`, { accountId: account.id, filename: 'statement.csv', bytes: file.length });
+      assert.equal(response.status, 201, await response.clone().text());
+      const ticket = await response.json();
+      const payload = await fetch(base + ticket.uploadUrl, {
+        method: 'PUT', headers: { 'Content-Type': 'text/csv', 'X-Upload-Ticket': ticket.uploadTicket, Cookie: owner.cookie, Origin: origin }, body: file,
+      });
+      assert.equal(payload.status, 200, await payload.clone().text());
+      return payload.json();
+    };
+    const load = async (id) => (await request(`${root}/imports/${id}`, { cookie: owner.cookie })).json();
+    const wait = async (id, state) => {
+      const end = Date.now() + 12_000;
+      while (Date.now() < end) {
+        const batch = await load(id);
+        if (batch.state === state) return batch;
+        if (batch.state === 'FAILED') assert.fail(JSON.stringify(batch));
+        await new Promise((resolve) => setTimeout(resolve, 70));
+      }
+      assert.fail(`Expected ${state}: ${JSON.stringify(await load(id))}`);
+    };
+    const validate = (batch, override = mapping) => command(`${root}/imports/${batch.id}/validate`, { ...coverage, mapping: override, version: batch.version });
+    const commit = (batch, key) => command(`${root}/imports/${batch.id}/commit`, { version: batch.version }, 'POST', key);
+    const rows = async (id) => (await (await request(`${root}/imports/${id}/rows`, { cookie: owner.cookie })).json()).items;
+    const countEntries = () => db.$transaction(async (tx) => {
+      await setContext(tx, owner.actor.id, workspace.id);
+      return tx.statementEntry.count();
+    });
+    const resolve = async (batch, decision) => {
+      const choices = (await rows(batch.id)).filter((row) => row.ambiguous && !row.error).map((row) => ({ rowId: row.id, decision }));
+      const response = await command(`${root}/imports/${batch.id}/resolutions`, { version: batch.version, choices }, 'PATCH');
+      assert.equal(response.status, 200, await response.clone().text());
+      return response.json();
+    };
+
+    const firstFile = header + identical + identical + stable;
+    const upload = await uploaded(firstFile);
+    const secondUpload = await uploaded(header + identical + '2026-10-09,Other credit,50000,Ref-C,\n');
+    assert.equal((await request(`${root}/imports/${upload.id}`, { cookie: other.cookie })).status, 404);
+    const queued = await validate(upload);
+    assert.equal(queued.status, 202, await queued.clone().text());
+    assert.ok(queued.headers.get('location').endsWith(upload.id));
+    assert.equal((await validate(secondUpload)).status, 202);
+    const firstReview = await wait(upload.id, 'REVIEW');
+    const secondReview = await wait(secondUpload.id, 'REVIEW');
+    assert.equal(firstReview.reviewCount, 2);
+    assert.equal(secondReview.reviewCount, 0);
+    assert.equal(await countEntries(), 0);
+    assert.equal((await commit(firstReview)).status, 422);
+    const accepted = await resolve(firstReview, 'KEEP');
+    const commitKey = randomUUID();
+    assert.equal((await commit(accepted, commitKey)).status, 202);
+    assert.equal((await commit(accepted, commitKey)).status, 202);
+    assert.equal((await wait(upload.id, 'COMMITTED')).acceptedCount, 3);
+    assert.equal(await countEntries(), 3);
+    assert.ok(injectedFailures >= 3);
+
+    assert.equal((await commit(secondReview)).status, 202);
+    const stale = await wait(secondReview.id, 'REVIEW');
+    assert.equal(stale.problemCode, 'IMPORT_PREVIEW_STALE');
+    assert.equal(stale.reviewCount, 1);
+    assert.equal(await countEntries(), 3);
+    assert.equal((await commit(await resolve(stale, 'DUPLICATE'))).status, 202);
+    assert.equal((await wait(secondReview.id, 'COMMITTED')).acceptedCount, 1);
+    assert.equal(await countEntries(), 4);
+
+    const replay = await uploaded(firstFile);
+    const existing = await validate(replay);
+    assert.equal(existing.status, 202);
+    assert.equal((await existing.json()).id, upload.id);
+    assert.equal(await countEntries(), 4);
+
+    const differentMapping = await uploaded(firstFile);
+    assert.equal((await validate(differentMapping, { ...mapping, dateFormat: 'DMY' })).status, 409);
+
+    const conflicting = await uploaded(header + '2026-10-08,Different,-25000,Ref-B,stable-001\n');
+    assert.equal((await validate(conflicting)).status, 202);
+    const invalid = await wait(conflicting.id, 'REVIEW');
+    assert.equal(invalid.errorCount, 1);
+    assert.match((await rows(invalid.id))[0].error, /source transaction ID/);
+    assert.equal((await commit(invalid)).status, 422);
+
+    const empty = await uploaded(header);
+    assert.equal((await validate(empty)).status, 202);
+    assert.equal((await commit(await wait(empty.id, 'REVIEW'))).status, 202);
+    const emptyResult = await wait(empty.id, 'COMMITTED');
+    assert.equal(emptyResult.acceptedCount, 0);
+    assert.equal(emptyResult.coverageEnd, coverage.coverageEnd);
+  } finally {
+    await jobs.stop();
+    storage.onModuleDestroy();
+    await db.$disconnect();
+  }
 });
