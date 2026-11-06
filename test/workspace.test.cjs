@@ -437,9 +437,9 @@ test('statement publication resolves ambiguous rows, replays exact files and rev
     const coverage = { coverageStart: '2026-10-01', coverageEnd: '2026-10-31' };
     const mapping = { date: 0, description: 1, dateFormat: 'ISO', money: { mode: 'signed', amount: 2 }, reference: 3, sourceId: 4 };
 
-    const uploaded = async (text) => {
+    const uploaded = async (text, accountId = account.id) => {
       const file = Buffer.from(text);
-      const response = await command(`${root}/imports`, { accountId: account.id, filename: 'statement.csv', bytes: file.length });
+      const response = await command(`${root}/imports`, { accountId, filename: 'statement.csv', bytes: file.length });
       assert.equal(response.status, 201, await response.clone().text());
       const ticket = await response.json();
       const payload = await fetch(base + ticket.uploadUrl, {
@@ -584,6 +584,41 @@ test('statement publication resolves ambiguous rows, replays exact files and rev
       assert.equal(history.items.find((row) => row.id === receipt.id).verified, false);
       assert.equal((await reverse(expenseMatch.id)).status, 200);
       assert.equal((await get(`${root}/statement-entries/${debit.id}`)).status, 'UNMATCHED');
+    });
+    await t.test('transfer pairing locks both lines, excludes competing allocations and reverses both legs', async () => {
+      const reserve = await (await command(`${root}/accounts`, { label: 'Reserve' })).json();
+      const debitFile = header + '2026-10-20,Transfer out,-20000,,tr-debit\n2026-10-20,Same account credit,20000,,tr-same\n';
+      const creditFile = header + '2026-10-22,Transfer in,20000,,tr-credit\n2026-10-26,Late credit,20000,,tr-late\n';
+      for (const staged of [await uploaded(debitFile), await uploaded(creditFile, reserve.id)]) {
+        assert.equal((await validate(staged)).status, 202);
+        assert.equal((await commit(await wait(staged.id, 'REVIEW'))).status, 202);
+        await wait(staged.id, 'COMMITTED');
+      }
+      const get = (path) => request(path, { cookie: owner.cookie }).then((response) => response.json());
+      const { items } = await get(`${root}/statement-entries`);
+      const debit = items.find((line) => line.description === 'Transfer out');
+      const credit = items.find((line) => line.description === 'Transfer in');
+      const sameAccount = items.find((line) => line.description === 'Same account credit');
+      const late = items.find((line) => line.description === 'Late credit');
+      const available = await get(`${root}/statement-entries/${debit.id}/transfer-candidates`);
+      assert.deepEqual(available.items.map((line) => line.id), [credit.id]);
+      const pair = (creditEntryId) => command(`${root}/transfers`, { debitEntryId: debit.id, creditEntryId });
+      assert.equal((await pair(sameAccount.id)).status, 422);
+      assert.equal((await pair(late.id)).status, 422);
+      const competing = await Promise.all([pair(credit.id), pair(credit.id)]);
+      assert.deepEqual(competing.map((response) => response.status).sort(), [201, 409]);
+      const transfer = await competing.find((response) => response.status === 201).json();
+      assert.equal((await get(`${root}/statement-entries?status=TRANSFER`)).items.length, 2);
+      assert.equal((await get(`${root}/statement-entries/${credit.id}/candidates`)).length, 0);
+      const deniedMatch = await command(`${root}/matches`, { entryId: debit.id, targetKind: 'EXPENSE', targetId: randomUUID(), targetVersion: 1 });
+      assert.equal(deniedMatch.status, 409);
+      const reversed = await command(`${root}/transfers/${transfer.id}/reverse`, { version: 1, reason: 'Incorrect transfer pair' });
+      assert.equal(reversed.status, 200, await reversed.clone().text());
+      for (const id of [debit.id, credit.id]) {
+        const row = await get(`${root}/statement-entries/${id}`);
+        assert.equal(row.status, 'UNMATCHED');
+        assert.equal(row.transfers[0].reversalReason, 'Incorrect transfer pair');
+      }
     });
   } finally {
     await jobs.stop();

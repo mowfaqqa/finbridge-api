@@ -13,11 +13,12 @@ import { ApiListQuery, listQuery, pageResult, pageView } from '../platform/pagin
 import { Problem } from '../platform/problem';
 import { audit, idempotent, lockScope, mutationKey, requestId, type Tx } from '../platform/transaction';
 import { normalizeReference } from './csv';
+import { renderTransfer, transferSchema } from './transfer-view';
 
 const targetKind = z.enum(['INVOICE', 'SETTLEMENT', 'EXPENSE']);
-const lineStatus = z.enum(['UNMATCHED', 'MATCHED']);
+const lineStatus = z.enum(['UNMATCHED', 'MATCHED', 'TRANSFER']);
 const account = z.object({ id: uuid, label: z.string(), lastFour: z.string().nullable() });
-const lineSchema = z.object({
+export const lineSchema = z.object({
   id: uuid, account, batchId: uuid, date: dateOnly, description: z.string(), reference: z.string().nullable(),
   amountKobo: z.string(), currency: z.literal('NGN'), status: lineStatus,
 });
@@ -40,13 +41,13 @@ const reverseBody = z.object({ version, reason: z.string().trim().min(1).max(250
 const searchBody = z.object({ q: z.string().trim().min(1).max(120).optional() });
 
 const accountSelect = { id: true, label: true, lastFour: true } as const;
-const entryInclude = {
-  account: { select: accountSelect }, allocations: { where: { releasedAt: null }, select: { id: true } },
+export const entryInclude = {
+  account: { select: accountSelect }, allocations: { where: { releasedAt: null }, select: { transferId: true } },
 } satisfies Prisma.StatementEntryInclude;
-const renderLine = (row: Prisma.StatementEntryGetPayload<{ include: typeof entryInclude }>) => ({
+export const renderLine = (row: Prisma.StatementEntryGetPayload<{ include: typeof entryInclude }>) => ({
   id: row.id, account: row.account, batchId: row.batchId, date: fromDateOnly(row.bookingDate),
   description: row.description, reference: row.reference, amountKobo: row.amountKobo.toString(), currency: 'NGN' as const,
-  status: row.allocations.length ? 'MATCHED' : 'UNMATCHED',
+  status: row.allocations[0]?.transferId ? 'TRANSFER' : row.allocations.length ? 'MATCHED' : 'UNMATCHED',
 });
 const renderMatch = (row: ReconciliationMatch) => ({
   id: row.id, entryId: row.entryId, expenseId: row.expenseId, settlementId: row.settlementId, version: row.version,
@@ -158,7 +159,8 @@ export class ReconciliationController {
         where: {
           tenantId, accountId: query.accountId,
           bookingDate: { gte: query.start ? new Date(query.start) : undefined, lte: query.end ? new Date(query.end) : undefined },
-          allocations: query.status === 'MATCHED' ? { some: { releasedAt: null } } :
+          allocations: query.status === 'MATCHED' ? { some: { releasedAt: null, matchId: { not: null } } } :
+            query.status === 'TRANSFER' ? { some: { releasedAt: null, transferId: { not: null } } } :
             query.status === 'UNMATCHED' ? { none: { releasedAt: null } } : undefined,
           ...(query.q && { OR: [{ description: { contains: query.q, mode: 'insensitive' } }, { reference: { contains: query.q, mode: 'insensitive' } }] }),
         },
@@ -170,7 +172,7 @@ export class ReconciliationController {
   }
 
   @Get('statement-entries/:sid')
-  @ApiOutput(200, lineSchema.extend({ history: z.array(matchSchema) }))
+  @ApiOutput(200, lineSchema.extend({ history: z.array(matchSchema), transfers: z.array(transferSchema) }))
   get(@Actor() actor: ActorIdentity, @Param('wid') wid: string, @Param('sid') sid: string) {
     const tenantId = resourceId(wid);
     const id = resourceId(sid);
@@ -180,7 +182,11 @@ export class ReconciliationController {
       const history = await tx.reconciliationMatch.findMany({
         where: { tenantId, entryId: id }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 25,
       });
-      return { ...renderLine(line), history: history.map(renderMatch) };
+      const transfers = await tx.internalTransfer.findMany({
+        where: { tenantId, OR: [{ debitEntryId: id }, { creditEntryId: id }] },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 25,
+      });
+      return { ...renderLine(line), history: history.map(renderMatch), transfers: transfers.map(renderTransfer) };
     });
   }
 
